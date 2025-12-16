@@ -1,0 +1,388 @@
+@startuml Sentinel顺序图
+' ============================================
+' Sentinel 智能体系统 - UML 2.x 顺序图
+' 版本: v1.0
+' 日期: 2025-12-16
+' ============================================
+
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam maxMessageSize 200
+
+title Sentinel 智能体系统 - 核心业务流程顺序图
+
+' ============================================
+' 顺序图1: 创建测试环境（正常流程）
+' ============================================
+newpage 场景1: 创建测试环境（正常流程）
+
+actor "CI System\n(Jenkins)" as CI
+participant "API Gateway" as Gateway
+participant "TaskController" as TaskCtrl
+participant "TaskService" as TaskSvc
+participant "AgentBrain" as Brain
+participant "DockerSensor" as Sensor
+participant "RuleEngine" as Rule
+participant "DockerActuator" as Actuator
+participant "Kafka" as Kafka
+database "MySQL" as MySQL
+database "Redis" as Redis
+
+CI -> Gateway: POST /api/v1/tasks\n{serviceId, testType, dependencies}
+activate Gateway
+
+Gateway -> Gateway: JWT Token验证
+Gateway -> TaskCtrl: createTask(request)
+activate TaskCtrl
+
+TaskCtrl -> TaskSvc: createTask(taskRequest)
+activate TaskSvc
+
+TaskSvc -> MySQL: INSERT INTO task
+MySQL --> TaskSvc: taskId
+
+TaskSvc -> Kafka: publish("sentinel.task.created", taskEvent)
+Kafka --> TaskSvc: ack
+
+TaskSvc -> Brain: submitTask(taskRequest)
+activate Brain
+
+== 感知阶段 ==
+
+Brain -> Sensor: getMetrics()
+activate Sensor
+Sensor -> Sensor: 调用Docker Stats API
+Sensor --> Brain: Metrics{cpu:45%, mem:60%, containers:8}
+deactivate Sensor
+
+Brain -> MySQL: SELECT * FROM service_dependency\nWHERE service_id = ?
+MySQL --> Brain: dependencies[mysql:8.0, redis:7.0]
+
+== 决策阶段 ==
+
+Brain -> Rule: decide(task, metrics)
+activate Rule
+
+alt 资源充足 (mem < 60%)
+    Rule -> Rule: 评估规则: memory_usage < 0.6
+    Rule --> Brain: Decision{action:CREATE_NOW, containers:[mysql,redis]}
+else 资源紧张 (60% <= mem < 80%)
+    Rule -> Rule: 评估队列长度
+    alt queueSize < 3
+        Rule --> Brain: Decision{action:CREATE_NOW}
+    else queueSize >= 3
+        Rule --> Brain: Decision{action:ENQUEUE}
+    end
+else 资源不足 (mem >= 80%)
+    Rule --> Brain: Decision{action:ENQUEUE, alert:true}
+end
+deactivate Rule
+
+== 执行阶段 ==
+
+Brain -> Actuator: execute(decision)
+activate Actuator
+
+Actuator -> Actuator: generateComposeYaml(containers)
+note right: 动态生成docker-compose.yml\n包含mysql:8.0和redis:7.0
+
+Actuator -> Actuator: docker-compose up -d
+Actuator -> Actuator: waitForHealthCheck(timeout=120s)
+
+loop 每5秒检查一次
+    Actuator -> Actuator: curl http://localhost:3306
+    alt 健康检查通过
+        Actuator -> Actuator: break
+    end
+end
+
+Actuator -> MySQL: INSERT INTO environment\n{envId, status:BUSY, ports}
+MySQL --> Actuator: envId
+
+Actuator --> Brain: ActionResult{success:true, envId, accessUrl}
+deactivate Actuator
+
+Brain -> Kafka: publish("sentinel.env.created", envEvent)
+
+Brain -> Redis: SET task:{taskId}:status = RUNNING
+Redis --> Brain: OK
+
+Brain --> TaskSvc: TaskResponse{envId, accessUrl, ports}
+deactivate Brain
+
+TaskSvc --> TaskCtrl: TaskResponse
+deactivate TaskSvc
+
+TaskCtrl --> Gateway: 201 Created\n{taskId, envId, mysql_port:33061}
+deactivate TaskCtrl
+
+Gateway --> CI: HTTP 201\n{taskId, envId, accessUrl}
+deactivate Gateway
+
+' ============================================
+' 顺序图2: 环境启动失败 + AI诊断
+' ============================================
+newpage 场景2: 环境启动失败 + AI诊断
+
+actor "CI System" as CI2
+participant "TaskController" as TaskCtrl2
+participant "AgentBrain" as Brain2
+participant "DockerActuator" as Actuator2
+participant "LLMAdvisor" as LLM
+participant "DiagnosisCacheService" as Cache
+participant "Ollama" as Ollama
+database "MongoDB" as Mongo
+database "Redis" as Redis2
+
+CI2 -> TaskCtrl2: POST /api/v1/tasks
+activate TaskCtrl2
+
+TaskCtrl2 -> Brain2: submitTask(request)
+activate Brain2
+
+Brain2 -> Actuator2: execute(decision)
+activate Actuator2
+
+Actuator2 -> Actuator2: docker-compose up -d
+Actuator2 -> Actuator2: waitForHealthCheck()
+
+note over Actuator2: 容器启动超时(>120s)\n或健康检查失败
+
+Actuator2 -> Actuator2: docker logs mysql --tail 50
+Actuator2 --> Brain2: ActionResult{success:false, logs:"Error: port 3306 already in use..."}
+deactivate Actuator2
+
+== 学习阶段（AI诊断）==
+
+Brain2 -> Brain2: calculateLogHash(logs)
+note right: MD5("Error: port 3306...")
+
+Brain2 -> Cache: getCachedDiagnosis(logHash)
+activate Cache
+
+Cache -> Redis2: GET diagnosis:{logHash}
+Redis2 --> Cache: null (未命中)
+
+Cache --> Brain2: null
+deactivate Cache
+
+Brain2 -> LLM: analyze(logs)
+activate LLM
+
+LLM -> LLM: buildPrompt(logs)
+note right
+  Prompt模板:
+  "你是资深DevOps工程师,
+   分析以下Docker启动失败日志:
+   {logs}
+   请给出JSON格式诊断结果"
+end note
+
+LLM -> Ollama: POST /api/generate\n{model:"qwen2.5:7b", prompt}
+activate Ollama
+note over Ollama: Qwen2.5-7B模型推理\n耗时约5-8秒
+Ollama --> LLM: {response: "{\\"rootCause\\":\\"端口冲突\\",...}"}
+deactivate Ollama
+
+LLM -> LLM: parseJsonResponse()
+LLM --> Brain2: DiagnosisResult{rootCause, solutions}
+deactivate LLM
+
+Brain2 -> Cache: saveDiagnosis(logHash, result)
+activate Cache
+
+Cache -> Redis2: SET diagnosis:{logHash} = result\nEX 86400
+Redis2 --> Cache: OK
+
+Cache -> Mongo: INSERT INTO diagnosis_logs\n{logHash, result, timestamp}
+Mongo --> Cache: OK
+
+Cache --> Brain2: saved
+deactivate Cache
+
+Brain2 --> TaskCtrl2: TaskResponse{status:FAILED, diagnosis}
+deactivate Brain2
+
+TaskCtrl2 --> CI2: 200 OK\n{status:FAILED, diagnosis:{rootCause:"端口冲突",...}}
+deactivate TaskCtrl2
+
+' ============================================
+' 顺序图3: 环境复用流程
+' ============================================
+newpage 场景3: 环境复用流程
+
+actor "CI System" as CI3
+participant "TaskController" as TaskCtrl3
+participant "AgentBrain" as Brain3
+participant "DockerSensor" as Sensor3
+participant "RuleEngine" as Rule3
+participant "EnvironmentService" as EnvSvc
+participant "DockerActuator" as Actuator3
+database "MySQL" as MySQL3
+database "Redis" as Redis3
+
+CI3 -> TaskCtrl3: POST /api/v1/tasks\n{serviceId:"user-service", testType:UNIT_TEST}
+activate TaskCtrl3
+
+TaskCtrl3 -> Brain3: submitTask(request)
+activate Brain3
+
+Brain3 -> Sensor3: getMetrics()
+Sensor3 --> Brain3: Metrics{cpu:70%, mem:75%}
+
+Brain3 -> Rule3: decide(task, metrics)
+activate Rule3
+
+Rule3 -> Rule3: 评估资源状态
+note right: 资源紧张，优先复用
+
+Rule3 -> EnvSvc: findIdleEnvironment(config)
+activate EnvSvc
+
+EnvSvc -> MySQL3: SELECT * FROM environment\nWHERE status='IDLE'\nAND config_hash = ?
+MySQL3 --> EnvSvc: Environment{envId:"env-456", containers:[mysql,redis]}
+
+EnvSvc -> EnvSvc: validateEnvironment()
+note right
+  验证:
+  1. 镜像版本匹配
+  2. 环境变量一致
+  3. 端口可用
+end note
+
+EnvSvc --> Rule3: Environment{envId:"env-456"}
+deactivate EnvSvc
+
+Rule3 --> Brain3: Decision{action:REUSE, reuseEnvId:"env-456"}
+deactivate Rule3
+
+Brain3 -> Actuator3: assignIdleEnvironment(decision)
+activate Actuator3
+
+Actuator3 -> MySQL3: UPDATE environment\nSET status='BUSY', task_id=?\nWHERE env_id='env-456'
+MySQL3 --> Actuator3: OK
+
+Actuator3 -> Actuator3: refreshHealthCheck()
+
+Actuator3 --> Brain3: ActionResult{success:true, envId:"env-456", reused:true}
+deactivate Actuator3
+
+Brain3 -> Redis3: SET task:{taskId}:status = RUNNING
+Brain3 -> Redis3: INCR stats:env_reuse_count
+
+Brain3 --> TaskCtrl3: TaskResponse{envId:"env-456", reused:true}
+deactivate Brain3
+
+TaskCtrl3 --> CI3: 201 Created\n{envId:"env-456", reused:true, startupTime:"<1s"}
+deactivate TaskCtrl3
+
+note over CI3: 环境复用成功\n启动时间从30s降至<1s
+
+' ============================================
+' 顺序图4: 资源监控与告警
+' ============================================
+newpage 场景4: 资源监控与告警
+
+participant "Scheduler\n(每10秒)" as Scheduler
+participant "MonitorService" as MonitorSvc
+participant "DockerSensor" as Sensor4
+participant "AlertActuator" as AlertAct
+participant "Kafka" as Kafka4
+database "MySQL" as MySQL4
+database "Redis" as Redis4
+actor "运维工程师" as Ops
+
+loop 每10秒执行
+    Scheduler -> MonitorSvc: collectAndCheckMetrics()
+    activate MonitorSvc
+    
+    MonitorSvc -> Sensor4: getMetrics()
+    activate Sensor4
+    
+    Sensor4 -> Sensor4: docker stats --no-stream
+    Sensor4 -> Sensor4: 解析CPU/内存/磁盘指标
+    
+    Sensor4 --> MonitorSvc: Metrics{cpu:85%, mem:82%, disk:45%}
+    deactivate Sensor4
+    
+    MonitorSvc -> Redis4: SET metrics:current = {json}
+    MonitorSvc -> Kafka4: publish("sentinel.metrics", metricsEvent)
+    
+    MonitorSvc -> MonitorSvc: checkThresholds()
+    
+    alt CPU > 80% 或 Memory > 80%
+        MonitorSvc -> MySQL4: SELECT * FROM alert_rules\nWHERE enabled = true
+        MySQL4 --> MonitorSvc: rules[]
+        
+        MonitorSvc -> AlertAct: sendAlert(alert)
+        activate AlertAct
+        
+        AlertAct -> AlertAct: 构建告警消息
+        note right
+          告警内容:
+          [Sentinel] 资源告警
+          CPU: 85% (阈值: 80%)
+          Memory: 82% (阈值: 80%)
+          建议: 暂停新任务创建
+        end note
+        
+        AlertAct -> Ops: 发送钉钉/邮件通知
+        AlertAct -> Kafka4: publish("sentinel.alerts", alertEvent)
+        
+        AlertAct --> MonitorSvc: alertSent
+        deactivate AlertAct
+        
+        MonitorSvc -> Redis4: SET system:status = "THROTTLED"
+        note right: 系统进入限流模式\n新任务自动进入等待队列
+    end
+    
+    deactivate MonitorSvc
+end
+
+' ============================================
+' 顺序图5: 缓存命中的快速诊断
+' ============================================
+newpage 场景5: 缓存命中的快速诊断
+
+actor "CI System" as CI5
+participant "DiagnosisController" as DiagCtrl
+participant "DiagnosisService" as DiagSvc
+participant "DiagnosisCacheService" as Cache5
+database "Redis" as Redis5
+
+CI5 -> DiagCtrl: GET /api/v1/diagnosis/{containerId}
+activate DiagCtrl
+
+DiagCtrl -> DiagSvc: diagnose(containerId)
+activate DiagSvc
+
+DiagSvc -> DiagSvc: docker logs {containerId} --tail 50
+DiagSvc -> DiagSvc: logHash = MD5(logs)
+
+DiagSvc -> Cache5: getCachedDiagnosis(logHash)
+activate Cache5
+
+Cache5 -> Redis5: GET diagnosis:{logHash}
+Redis5 --> Cache5: {rootCause:"端口冲突", solutions:[...]}
+note right: 缓存命中!\n响应时间 < 100ms
+
+Cache5 -> Redis5: INCR diagnosis:{logHash}:hitCount
+Redis5 --> Cache5: hitCount: 5
+
+Cache5 --> DiagSvc: DiagnosisResult{cached:true, hitCount:5}
+deactivate Cache5
+
+DiagSvc --> DiagCtrl: DiagnosisResult
+deactivate DiagSvc
+
+DiagCtrl --> CI5: 200 OK\n{cached:true, responseTime:"45ms", diagnosis:{...}}
+deactivate DiagCtrl
+
+note over CI5
+  缓存命中优势:
+  - 响应时间: 45ms (vs 首次8s)
+  - 无需调用Ollama
+  - 节省GPU资源
+end note
+
+@enduml

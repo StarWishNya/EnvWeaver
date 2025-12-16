@@ -1,0 +1,64 @@
+@startuml UML文档索引
+' ============================================
+' Sentinel 智能体系统 - UML 文档索引
+' ============================================
+
+title Sentinel UML 建模文档索引
+
+note as N1
+<b>Sentinel 智能体系统 - UML 2.x 建模文档</b>
+
+<b>版本:</b> v1.0
+<b>日期:</b> 2025-12-16
+<b>作者:</b> 庄思南
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>📁 文档结构:</b>
+
+1. <b>use-case-diagram.puml</b> - 用例图
+   • 定义系统参与者(CI Runner、开发人员、运维工程师、管理员)
+   • 描述核心用例及其关系
+   • 展示系统边界和外部系统交互
+
+2. <b>class-diagram.puml</b> - 类图
+   • 领域模型(Task, Environment, Container等)
+   • 智能体核心(AgentBrain, Perceiver, DecisionEngine, Actuator)
+   • 服务层和控制器层设计
+
+3. <b>sequence-diagram.puml</b> - 顺序图
+   • 场景1: 创建测试环境(正常流程)
+   • 场景2: 环境启动失败 + AI诊断
+   • 场景3: 环境复用流程
+   • 场景4: 资源监控与告警
+   • 场景5: 缓存命中的快速诊断
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>🔧 如何查看:</b>
+
+方式1: VS Code + PlantUML 插件
+  • 安装 "PlantUML" 插件
+  • 打开 .puml 文件
+  • Alt+D 预览图表
+
+方式2: 在线渲染
+  • 访问 https://www.plantuml.com/plantuml/uml/
+  • 粘贴 .puml 文件内容
+
+方式3: 命令行导出
+  • java -jar plantuml.jar *.puml
+  • 生成 PNG/SVG 图片
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>📊 技术栈:</b>
+• Java 17 + Spring Boot 3.2
+• MySQL 8.0 + MongoDB 5.0 + Redis 7.0
+• Kafka 3.x
+• Docker Engine API v1.41
+• Ollama + Qwen2.5-7B
+
+end note
+
+@enduml

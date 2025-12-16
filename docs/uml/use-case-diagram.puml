@@ -1,0 +1,148 @@
+@startuml Sentinel用例图
+' ============================================
+' Sentinel 智能体系统 - UML 2.x 用例图
+' 版本: v1.0
+' 日期: 2025-12-16
+' ============================================
+
+left to right direction
+skinparam packageStyle rectangle
+skinparam actorStyle awesome
+
+' ============================================
+' 参与者定义
+' ============================================
+actor "CI Runner\n(Jenkins/GitLab)" as CI <<系统>>
+actor "开发人员" as Developer <<人员>>
+actor "运维工程师" as Ops <<人员>>
+actor "系统管理员" as Admin <<人员>>
+
+' 外部系统
+actor "Docker Engine" as Docker <<外部系统>>
+actor "Ollama AI" as Ollama <<外部系统>>
+actor "Kafka" as Kafka <<外部系统>>
+
+' ============================================
+' 系统边界
+' ============================================
+rectangle "Sentinel 智能体系统" as Sentinel {
+    
+    ' 任务管理模块
+    package "任务管理" {
+        usecase "创建测试环境" as UC_CreateEnv
+        usecase "查询任务状态" as UC_QueryTask
+        usecase "取消任务" as UC_CancelTask
+        usecase "解析服务依赖" as UC_ParseDep
+    }
+    
+    ' 资源监控模块
+    package "资源监控" {
+        usecase "采集系统指标" as UC_CollectMetrics
+        usecase "查看资源仪表盘" as UC_Dashboard
+        usecase "设置告警阈值" as UC_SetAlert
+        usecase "接收告警通知" as UC_ReceiveAlert
+    }
+    
+    ' 容器执行模块
+    package "容器执行" {
+        usecase "启动容器" as UC_StartContainer
+        usecase "停止容器" as UC_StopContainer
+        usecase "查看容器日志" as UC_ViewLogs
+        usecase "生成Compose配置" as UC_GenCompose
+        usecase "复用空闲环境" as UC_ReuseEnv
+    }
+    
+    ' AI分析模块
+    package "AI分析" {
+        usecase "诊断启动失败" as UC_Diagnose
+        usecase "查看诊断报告" as UC_ViewReport
+        usecase "缓存诊断结果" as UC_CacheDiagnosis
+    }
+    
+    ' 系统管理模块
+    package "系统管理" {
+        usecase "配置资源配额" as UC_ConfigQuota
+        usecase "管理镜像白名单" as UC_ManageImages
+        usecase "查看审计日志" as UC_AuditLog
+        usecase "用户认证" as UC_Auth
+    }
+}
+
+' ============================================
+' 参与者与用例的关联
+' ============================================
+
+' CI Runner 关联
+CI --> UC_CreateEnv
+CI --> UC_QueryTask
+CI --> UC_CancelTask
+
+' 开发人员关联
+Developer --> UC_QueryTask
+Developer --> UC_Dashboard
+Developer --> UC_ViewLogs
+Developer --> UC_ViewReport
+Developer --> UC_ReceiveAlert
+
+' 运维工程师关联
+Ops --> UC_ConfigQuota
+Ops --> UC_ManageImages
+Ops --> UC_SetAlert
+Ops --> UC_Dashboard
+Ops --> UC_ViewReport
+
+' 系统管理员关联
+Admin --> UC_AuditLog
+Admin --> UC_ConfigQuota
+Admin --> UC_ManageImages
+
+' ============================================
+' 用例之间的关系
+' ============================================
+
+' 包含关系 (<<include>>)
+UC_CreateEnv ..> UC_ParseDep : <<include>>
+UC_CreateEnv ..> UC_CollectMetrics : <<include>>
+UC_CreateEnv ..> UC_Auth : <<include>>
+UC_StartContainer ..> UC_GenCompose : <<include>>
+
+' 扩展关系 (<<extend>>)
+UC_CreateEnv <.. UC_ReuseEnv : <<extend>>\n[存在空闲环境]
+UC_StartContainer <.. UC_Diagnose : <<extend>>\n[启动失败时]
+UC_Diagnose <.. UC_CacheDiagnosis : <<extend>>\n[首次诊断]
+
+' 泛化关系
+UC_StartContainer --|> UC_CreateEnv
+UC_StopContainer --|> UC_CancelTask
+
+' ============================================
+' 外部系统交互
+' ============================================
+UC_StartContainer --> Docker : 调用Docker API
+UC_StopContainer --> Docker : 调用Docker API
+UC_CollectMetrics --> Docker : 获取容器指标
+UC_Diagnose --> Ollama : 调用AI分析
+UC_CreateEnv --> Kafka : 发布任务事件
+UC_CollectMetrics --> Kafka : 发布指标数据
+
+' ============================================
+' 注释
+' ============================================
+note right of UC_CreateEnv
+  核心用例：
+  1. 接收CI请求
+  2. 解析依赖关系
+  3. 决策创建策略
+  4. 执行容器操作
+end note
+
+note bottom of UC_Diagnose
+  AI诊断流程：
+  1. 提取容器日志
+  2. 计算日志哈希
+  3. 查询缓存
+  4. 调用Ollama分析
+  5. 缓存结果
+end note
+
+@enduml

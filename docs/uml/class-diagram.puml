@@ -1,0 +1,492 @@
+@startuml Sentinel类图
+' ============================================
+' Sentinel 智能体系统 - UML 2.x 类图
+' 版本: v1.0
+' 日期: 2025-12-16
+' ============================================
+
+skinparam classAttributeIconSize 0
+skinparam classFontStyle bold
+skinparam packageStyle rectangle
+
+' ============================================
+' 核心领域模型
+' ============================================
+package "领域模型 (Domain Model)" #LightBlue {
+    
+    class Task {
+        - id: Long
+        - taskId: String
+        - serviceId: String
+        - testType: TestType
+        - status: TaskStatus
+        - priority: Integer
+        - createdAt: LocalDateTime
+        - updatedAt: LocalDateTime
+        - completedAt: LocalDateTime
+        --
+        + create(): Task
+        + updateStatus(status: TaskStatus): void
+        + cancel(): void
+    }
+    
+    enum TestType {
+        UNIT_TEST
+        INTEGRATION_TEST
+        E2E_TEST
+        PERFORMANCE_TEST
+        SMOKE_TEST
+    }
+    
+    enum TaskStatus {
+        PENDING
+        QUEUED
+        RUNNING
+        SUCCESS
+        FAILED
+        CANCELLED
+        TIMEOUT
+    }
+    
+    class Environment {
+        - id: Long
+        - envId: String
+        - taskId: String
+        - status: EnvStatus
+        - accessUrl: String
+        - portMappings: Map<Integer, Integer>
+        - createdAt: LocalDateTime
+        - expiredAt: LocalDateTime
+        --
+        + provision(): void
+        + release(): void
+        + isExpired(): boolean
+        + isReusable(config: EnvConfig): boolean
+    }
+    
+    enum EnvStatus {
+        IDLE
+        PROVISIONING
+        BUSY
+        CLEANING
+        ERROR
+    }
+    
+    class Container {
+        - id: Long
+        - containerId: String
+        - imageName: String
+        - imageTag: String
+        - status: ContainerStatus
+        - ports: List<PortMapping>
+        - healthCheckUrl: String
+        --
+        + start(): void
+        + stop(): void
+        + restart(): void
+        + getLogs(tail: Integer): String
+    }
+    
+    enum ContainerStatus {
+        CREATED
+        RUNNING
+        PAUSED
+        STOPPED
+        FAILED
+    }
+    
+    class ServiceDependency {
+        - id: Long
+        - serviceId: String
+        - dependsOn: List<String>
+        - testType: TestType
+        - requiredImages: List<String>
+        --
+        + resolveDependencies(): List<String>
+        + hasCyclicDependency(): boolean
+    }
+    
+    class DiagnosisResult {
+        - id: String
+        - logHash: String
+        - rootCause: String
+        - possibleReasons: List<String>
+        - solutions: List<String>
+        - hitCount: Integer
+        - createdAt: LocalDateTime
+        --
+        + incrementHitCount(): void
+        + toJson(): String
+    }
+    
+    class Metrics {
+        - timestamp: LocalDateTime
+        - cpuUsage: Double
+        - memoryUsage: Double
+        - diskIoUsage: Double
+        - containerCount: Integer
+        - networkRxBytes: Long
+        - networkTxBytes: Long
+        --
+        + isHealthy(): boolean
+        + shouldEnqueue(): boolean
+        + toPrometheusFormat(): String
+    }
+    
+    class Rule {
+        - id: Long
+        - ruleId: String
+        - condition: String
+        - action: String
+        - priority: Integer
+        - enabled: Boolean
+        --
+        + evaluate(context: RuleContext): boolean
+        + getAction(): Decision
+    }
+}
+
+' ============================================
+' 智能体核心模块
+' ============================================
+package "智能体核心 (Agent Core)" #LightGreen {
+    
+    interface Perceiver {
+        + perceive(): TaskRequest
+        + getMetrics(): Metrics
+        + getDependencies(serviceId: String): List<String>
+    }
+    
+    interface DecisionEngine {
+        + decide(task: TaskRequest, metrics: Metrics): Decision
+    }
+    
+    interface Actuator {
+        + execute(decision: Decision): ActionResult
+    }
+    
+    class AgentBrain {
+        - perceiver: Perceiver
+        - decisionEngine: DecisionEngine
+        - actuator: Actuator
+        - learner: Learner
+        --
+        + mainLoop(): void
+        - perceive(): TaskRequest
+        - decide(task: TaskRequest): Decision
+        - execute(decision: Decision): ActionResult
+        - learn(result: ActionResult): void
+    }
+    
+    class Decision {
+        - action: ActionType
+        - task: TaskRequest
+        - containers: List<ContainerSpec>
+        - reuseEnvId: String
+        - reason: String
+        --
+        + isCreateAction(): boolean
+        + isEnqueueAction(): boolean
+        + isReuseAction(): boolean
+    }
+    
+    enum ActionType {
+        CREATE_NOW
+        ENQUEUE
+        REUSE
+        REJECT
+    }
+    
+    class ActionResult {
+        - success: boolean
+        - envId: String
+        - errorCode: String
+        - errorMessage: String
+        - logs: String
+        - duration: Long
+        --
+        + isFailure(): boolean
+        + getLogHash(): String
+    }
+    
+    class TaskRequest {
+        - taskId: String
+        - serviceId: String
+        - testType: TestType
+        - requiredDependencies: List<String>
+        - priority: Integer
+        - timeout: Integer
+        --
+        + validate(): boolean
+    }
+}
+
+' ============================================
+' 感知器实现
+' ============================================
+package "感知器 (Sensors)" #LightYellow {
+    
+    class DockerSensor implements Perceiver {
+        - dockerClient: DockerClient
+        - metricsCache: MetricsCache
+        - refreshInterval: Integer
+        --
+        + getMetrics(): Metrics
+        + getContainerStats(containerId: String): ContainerStats
+        + listContainers(): List<Container>
+    }
+    
+    class TaskQueueSensor implements Perceiver {
+        - kafkaConsumer: KafkaConsumer
+        - taskQueue: BlockingQueue<TaskRequest>
+        --
+        + perceive(): TaskRequest
+        + getQueueSize(): Integer
+    }
+    
+    class DependencyParser implements Perceiver {
+        - dependencyRepository: DependencyRepository
+        --
+        + getDependencies(serviceId: String): List<String>
+        + detectCyclicDependency(serviceId: String): boolean
+    }
+}
+
+' ============================================
+' 决策引擎实现
+' ============================================
+package "决策引擎 (Decision Engines)" #LightPink {
+    
+    class RuleEngine implements DecisionEngine {
+        - rules: List<Rule>
+        - ruleRepository: RuleRepository
+        --
+        + decide(task: TaskRequest, metrics: Metrics): Decision
+        + loadRules(): void
+        + evaluateRules(context: RuleContext): Decision
+    }
+    
+    class LLMAdvisor implements DecisionEngine {
+        - ollamaClient: OllamaClient
+        - promptTemplate: String
+        --
+        + decide(task: TaskRequest, metrics: Metrics): Decision
+        + analyze(log: String): DiagnosisResult
+        - buildPrompt(context: String): String
+    }
+    
+    class HybridDecisionEngine implements DecisionEngine {
+        - ruleEngine: RuleEngine
+        - llmAdvisor: LLMAdvisor
+        - ruleThreshold: Double
+        --
+        + decide(task: TaskRequest, metrics: Metrics): Decision
+        - shouldUseLLM(metrics: Metrics): boolean
+    }
+}
+
+' ============================================
+' 执行器实现
+' ============================================
+package "执行器 (Actuators)" #LightCoral {
+    
+    class DockerActuator implements Actuator {
+        - dockerClient: DockerClient
+        - composeGenerator: ComposeGenerator
+        --
+        + execute(decision: Decision): ActionResult
+        + createEnvironment(decision: Decision): ActionResult
+        + assignIdleEnvironment(decision: Decision): ActionResult
+        + stopContainer(containerId: String): void
+    }
+    
+    class ComposeGenerator {
+        - templateEngine: TemplateEngine
+        - imageRegistry: String
+        --
+        + generate(containers: List<ContainerSpec>): String
+        + generateFromTemplate(templateName: String, context: Map): String
+    }
+    
+    class AlertActuator implements Actuator {
+        - alertChannels: List<AlertChannel>
+        --
+        + execute(decision: Decision): ActionResult
+        + sendAlert(alert: Alert): void
+    }
+    
+    class ContainerSpec {
+        - imageName: String
+        - imageTag: String
+        - ports: List<PortMapping>
+        - envVars: Map<String, String>
+        - volumes: List<VolumeMount>
+        - healthCheck: HealthCheckConfig
+        --
+        + toComposeService(): String
+    }
+}
+
+' ============================================
+' 学习模块
+' ============================================
+package "学习模块 (Learning)" #Lavender {
+    
+    interface Learner {
+        + learn(result: ActionResult): void
+    }
+    
+    class DiagnosisCacheService implements Learner {
+        - redisTemplate: RedisTemplate
+        - diagnosisRepository: DiagnosisRepository
+        --
+        + learn(result: ActionResult): void
+        + getCachedDiagnosis(logHash: String): DiagnosisResult
+        + saveDiagnosis(logHash: String, result: DiagnosisResult): void
+    }
+    
+    class ExperienceCollector implements Learner {
+        - mongoTemplate: MongoTemplate
+        --
+        + learn(result: ActionResult): void
+        + collectMetrics(metrics: Metrics): void
+        + getHistoricalPatterns(): List<Pattern>
+    }
+}
+
+' ============================================
+' 服务层
+' ============================================
+package "服务层 (Services)" #Wheat {
+    
+    class TaskService {
+        - taskRepository: TaskRepository
+        - agentBrain: AgentBrain
+        - kafkaTemplate: KafkaTemplate
+        --
+        + createTask(request: TaskRequest): Task
+        + getTaskStatus(taskId: String): TaskStatus
+        + cancelTask(taskId: String): void
+        + listTasks(filter: TaskFilter): Page<Task>
+    }
+    
+    class EnvironmentService {
+        - environmentRepository: EnvironmentRepository
+        - dockerActuator: DockerActuator
+        --
+        + provisionEnvironment(task: Task): Environment
+        + releaseEnvironment(envId: String): void
+        + findIdleEnvironment(config: EnvConfig): Environment
+        + getEnvironmentStatus(envId: String): EnvStatus
+    }
+    
+    class MonitorService {
+        - dockerSensor: DockerSensor
+        - metricsRepository: MetricsRepository
+        --
+        + getCurrentMetrics(): Metrics
+        + getHistoricalMetrics(from: LocalDateTime, to: LocalDateTime): List<Metrics>
+        + checkThresholds(): List<Alert>
+    }
+    
+    class DiagnosisService {
+        - llmAdvisor: LLMAdvisor
+        - cacheService: DiagnosisCacheService
+        --
+        + diagnose(containerId: String): DiagnosisResult
+        + getDiagnosisHistory(taskId: String): List<DiagnosisResult>
+    }
+}
+
+' ============================================
+' 控制器层
+' ============================================
+package "控制器层 (Controllers)" #Thistle {
+    
+    class TaskController {
+        - taskService: TaskService
+        --
+        + createTask(request: CreateTaskRequest): ResponseEntity<TaskResponse>
+        + getTask(taskId: String): ResponseEntity<TaskResponse>
+        + cancelTask(taskId: String): ResponseEntity<Void>
+        + listTasks(filter: TaskFilter): ResponseEntity<Page<TaskResponse>>
+    }
+    
+    class EnvironmentController {
+        - environmentService: EnvironmentService
+        --
+        + getEnvironment(envId: String): ResponseEntity<EnvironmentResponse>
+        + releaseEnvironment(envId: String): ResponseEntity<Void>
+        + listEnvironments(): ResponseEntity<List<EnvironmentResponse>>
+    }
+    
+    class MonitorController {
+        - monitorService: MonitorService
+        --
+        + getMetrics(): ResponseEntity<MetricsResponse>
+        + getHistoricalMetrics(from: String, to: String): ResponseEntity<List<MetricsResponse>>
+    }
+    
+    class DiagnosisController {
+        - diagnosisService: DiagnosisService
+        --
+        + diagnose(containerId: String): ResponseEntity<DiagnosisResponse>
+        + getDiagnosisHistory(taskId: String): ResponseEntity<List<DiagnosisResponse>>
+    }
+}
+
+' ============================================
+' 关系定义
+' ============================================
+
+' 领域模型关系
+Task "1" *-- "1..*" Container : contains
+Task "1" -- "1" Environment : creates
+Task --> TaskStatus
+Task --> TestType
+Environment --> EnvStatus
+Container --> ContainerStatus
+ServiceDependency --> TestType
+
+' 智能体核心关系
+AgentBrain --> Perceiver : uses
+AgentBrain --> DecisionEngine : uses
+AgentBrain --> Actuator : uses
+AgentBrain --> Learner : uses
+Decision --> ActionType
+Decision --> TaskRequest
+Decision --> ContainerSpec
+
+' 实现关系
+DockerSensor ..|> Perceiver
+TaskQueueSensor ..|> Perceiver
+DependencyParser ..|> Perceiver
+RuleEngine ..|> DecisionEngine
+LLMAdvisor ..|> DecisionEngine
+HybridDecisionEngine ..|> DecisionEngine
+DockerActuator ..|> Actuator
+AlertActuator ..|> Actuator
+DiagnosisCacheService ..|> Learner
+ExperienceCollector ..|> Learner
+
+' 组合关系
+HybridDecisionEngine *-- RuleEngine
+HybridDecisionEngine *-- LLMAdvisor
+DockerActuator *-- ComposeGenerator
+
+' 服务层关系
+TaskService --> AgentBrain
+TaskService --> TaskRepository
+EnvironmentService --> DockerActuator
+EnvironmentService --> EnvironmentRepository
+MonitorService --> DockerSensor
+DiagnosisService --> LLMAdvisor
+DiagnosisService --> DiagnosisCacheService
+
+' 控制器层关系
+TaskController --> TaskService
+EnvironmentController --> EnvironmentService
+MonitorController --> MonitorService
+DiagnosisController --> DiagnosisService
+
+@enduml
