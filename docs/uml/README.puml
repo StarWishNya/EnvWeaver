@@ -54,8 +54,7 @@ note as N1
 
 <b>📊 技术栈:</b>
 • Java 17 + Spring Boot 3.2
-• MySQL 8.0 + MongoDB 5.0 + Redis 7.0
-• Kafka 3.x
+• MySQL 8.0 + Redis 7.0
 • Docker Engine API v1.41
 • Ollama + Qwen2.5-7B
 

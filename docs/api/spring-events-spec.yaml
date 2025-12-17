@@ -1,0 +1,316 @@
+# ============================================================
+# Sentinel 内部事件规范
+# ============================================================
+# 单体架构使用 Spring Events 进行模块间通信
+# 替代微服务架构中的 Kafka 消息队列
+# ============================================================
+
+metadata:
+  name: Sentinel Spring Events Specification
+  version: 1.0.0
+  description: 单体应用内部事件通信规范
+
+# ============================================================
+# 事件基类
+# ============================================================
+base_event:
+  class: com.sentinel.event.BaseEvent
+  properties:
+    eventId:
+      type: String
+      description: 事件唯一标识 (UUID)
+    eventType:
+      type: String
+      description: 事件类型
+    timestamp:
+      type: LocalDateTime
+      description: 事件发生时间
+    source:
+      type: String
+      description: 事件来源模块
+
+# ============================================================
+# 事件定义
+# ============================================================
+events:
+  # ============================================================
+  # 1. 任务事件
+  # ============================================================
+  task_events:
+    package: com.sentinel.event.task
+    events:
+      - name: TaskCreatedEvent
+        description: 任务创建事件
+        properties:
+          taskId:
+            type: Long
+          taskName:
+            type: String
+          taskType:
+            type: TaskType
+          priority:
+            type: Integer
+        listeners:
+          - EnvironmentService  # 准备环境
+          - MetricsService      # 记录指标
+
+      - name: TaskStartedEvent
+        description: 任务开始执行事件
+        properties:
+          taskId:
+            type: Long
+          environmentId:
+            type: Long
+          containerId:
+            type: String
+        listeners:
+          - MetricsService      # 更新运行中任务数
+
+      - name: TaskCompletedEvent
+        description: 任务完成事件
+        properties:
+          taskId:
+            type: Long
+          exitCode:
+            type: Integer
+          duration:
+            type: Long
+            description: 执行时长(毫秒)
+        listeners:
+          - EnvironmentService  # 回收环境
+          - MetricsService      # 记录完成指标
+
+      - name: TaskFailedEvent
+        description: 任务失败事件
+        properties:
+          taskId:
+            type: Long
+          errorMessage:
+            type: String
+          errorType:
+            type: ErrorType
+          logs:
+            type: String
+        listeners:
+          - DiagnosisService    # 触发 AI 诊断
+          - EnvironmentService  # 回收环境
+          - MetricsService      # 记录失败指标
+
+  # ============================================================
+  # 2. 环境事件
+  # ============================================================
+  environment_events:
+    package: com.sentinel.event.environment
+    events:
+      - name: EnvironmentCreatedEvent
+        description: 环境创建完成事件
+        properties:
+          environmentId:
+            type: Long
+          containerId:
+            type: String
+          type:
+            type: EnvironmentType
+        listeners:
+          - TaskService         # 通知任务可以开始
+
+      - name: EnvironmentReadyEvent
+        description: 环境就绪事件
+        properties:
+          environmentId:
+            type: Long
+        listeners:
+          - TaskService         # 分配给等待的任务
+
+      - name: EnvironmentReleasedEvent
+        description: 环境释放事件
+        properties:
+          environmentId:
+            type: Long
+          taskId:
+            type: Long
+          reuseCount:
+            type: Integer
+        listeners:
+          - MetricsService      # 更新环境池指标
+
+      - name: EnvironmentErrorEvent
+        description: 环境异常事件
+        properties:
+          environmentId:
+            type: Long
+          errorMessage:
+            type: String
+        listeners:
+          - DiagnosisService    # 触发诊断
+          - TaskService         # 通知关联任务
+
+  # ============================================================
+  # 3. 诊断事件
+  # ============================================================
+  diagnosis_events:
+    package: com.sentinel.event.diagnosis
+    events:
+      - name: DiagnosisRequestedEvent
+        description: 诊断请求事件
+        properties:
+          diagnosisId:
+            type: Long
+          taskId:
+            type: Long
+          errorContext:
+            type: String
+        listeners:
+          - AIService           # 执行 AI 诊断
+
+      - name: DiagnosisCompletedEvent
+        description: 诊断完成事件
+        properties:
+          diagnosisId:
+            type: Long
+          taskId:
+            type: Long
+          result:
+            type: DiagnosisResult
+          fromCache:
+            type: Boolean
+        listeners:
+          - TaskService         # 更新任务诊断结果
+          - CacheService        # 缓存诊断结果
+
+  # ============================================================
+  # 4. 资源事件
+  # ============================================================
+  resource_events:
+    package: com.sentinel.event.resource
+    events:
+      - name: ResourceThresholdExceededEvent
+        description: 资源超阈值事件
+        properties:
+          resourceType:
+            type: ResourceType
+            enum: [CPU, MEMORY, DISK]
+          currentValue:
+            type: Double
+          threshold:
+            type: Double
+        listeners:
+          - TaskService         # 暂停低优先级任务
+          - AlertService        # 发送告警
+
+      - name: ResourceRecoveredEvent
+        description: 资源恢复事件
+        properties:
+          resourceType:
+            type: ResourceType
+          currentValue:
+            type: Double
+        listeners:
+          - TaskService         # 恢复暂停的任务
+
+# ============================================================
+# 事件发布配置
+# ============================================================
+event_publisher:
+  class: org.springframework.context.ApplicationEventPublisher
+  async_config:
+    enabled: true
+    executor:
+      corePoolSize: 4
+      maxPoolSize: 10
+      queueCapacity: 100
+      threadNamePrefix: "event-"
+
+# ============================================================
+# 事件监听器配置
+# ============================================================
+event_listener:
+  annotations:
+    - "@EventListener"           # 同步监听
+    - "@Async @EventListener"    # 异步监听
+    - "@TransactionalEventListener"  # 事务提交后监听
+  
+  best_practices:
+    - 诊断事件使用 @Async 异步处理，避免阻塞主流程
+    - 数据库更新事件使用 @TransactionalEventListener
+    - 异常处理：监听器应捕获异常，避免影响其他监听器
+
+# ============================================================
+# 代码示例
+# ============================================================
+code_examples:
+  event_class: |
+    @Getter
+    public class TaskFailedEvent extends BaseEvent {
+        private final Long taskId;
+        private final String errorMessage;
+        private final ErrorType errorType;
+        private final String logs;
+        
+        public TaskFailedEvent(Object source, Long taskId, 
+                               String errorMessage, ErrorType errorType, String logs) {
+            super(source);
+            this.taskId = taskId;
+            this.errorMessage = errorMessage;
+            this.errorType = errorType;
+            this.logs = logs;
+        }
+    }
+
+  event_publisher: |
+    @Service
+    @RequiredArgsConstructor
+    public class TaskService {
+        private final ApplicationEventPublisher eventPublisher;
+        
+        public void handleTaskFailure(Task task, Exception e) {
+            // 更新任务状态
+            task.setStatus(TaskStatus.FAILED);
+            task.setErrorMessage(e.getMessage());
+            taskRepository.save(task);
+            
+            // 发布失败事件
+            eventPublisher.publishEvent(new TaskFailedEvent(
+                this,
+                task.getId(),
+                e.getMessage(),
+                ErrorType.classify(e),
+                task.getLogs()
+            ));
+        }
+    }
+
+  event_listener: |
+    @Component
+    @RequiredArgsConstructor
+    @Slf4j
+    public class DiagnosisEventListener {
+        private final DiagnosisService diagnosisService;
+        
+        @Async
+        @EventListener
+        public void onTaskFailed(TaskFailedEvent event) {
+            log.info("收到任务失败事件, taskId={}", event.getTaskId());
+            try {
+                diagnosisService.diagnose(event.getTaskId(), event.getLogs());
+            } catch (Exception e) {
+                log.error("诊断失败", e);
+            }
+        }
+    }
+
+  async_config: |
+    @Configuration
+    @EnableAsync
+    public class AsyncConfig {
+        @Bean(name = "eventExecutor")
+        public Executor eventExecutor() {
+            ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+            executor.setCorePoolSize(4);
+            executor.setMaxPoolSize(10);
+            executor.setQueueCapacity(100);
+            executor.setThreadNamePrefix("event-");
+            executor.initialize();
+            return executor;
+        }
+    }

@@ -1,0 +1,142 @@
+@startuml Sentinel ER Diagram (精简版 v2.0)
+
+!define TABLE(name) entity name << (T,#FFAAAA) >>
+!define PK(x) <b><u>x</u></b>
+!define FK(x) <i>x</i>
+
+title Sentinel 数据库 ER 图 (MVP 版本 - 5 张核心表)
+
+' 样式设置
+skinparam linetype ortho
+skinparam entity {
+    BackgroundColor #FEFECE
+    BorderColor #A80036
+}
+
+' ============================================================
+' 核心业务表
+' ============================================================
+
+TABLE(t_task) {
+    PK(id) : BIGINT
+    --
+    task_code : VARCHAR(64) <<UNIQUE>>
+    service_id : VARCHAR(64)
+    test_type : VARCHAR(32)
+    dependencies : JSON
+    status : VARCHAR(32)
+    priority : INT
+    FK(environment_id) : BIGINT
+    error_message : TEXT
+    started_at : DATETIME
+    completed_at : DATETIME
+    created_at : DATETIME
+    updated_at : DATETIME
+}
+
+TABLE(t_environment) {
+    PK(id) : BIGINT
+    --
+    env_code : VARCHAR(64) <<UNIQUE>>
+    FK(task_id) : BIGINT
+    status : VARCHAR(32)
+    compose_content : TEXT
+    access_url : VARCHAR(255)
+    port_mappings : JSON
+    resource_usage : JSON
+    expires_at : DATETIME
+    created_at : DATETIME
+    updated_at : DATETIME
+}
+
+TABLE(t_container) {
+    PK(id) : BIGINT
+    --
+    FK(environment_id) : BIGINT
+    container_id : VARCHAR(64)
+    container_name : VARCHAR(128)
+    image : VARCHAR(255)
+    status : VARCHAR(32)
+    port_mapping : VARCHAR(64)
+    health_status : VARCHAR(32)
+    last_log : TEXT
+    started_at : DATETIME
+    stopped_at : DATETIME
+    created_at : DATETIME
+    updated_at : DATETIME
+}
+
+TABLE(t_diagnosis_cache) {
+    PK(id) : BIGINT
+    --
+    log_hash : CHAR(32) <<UNIQUE>>
+    log_sample : TEXT
+    root_cause : VARCHAR(500)
+    possible_reasons : JSON
+    solutions : JSON
+    hit_count : INT
+    last_hit_at : DATETIME
+    created_at : DATETIME
+}
+
+TABLE(t_system_config) {
+    PK(id) : BIGINT
+    --
+    config_key : VARCHAR(64) <<UNIQUE>>
+    config_value : TEXT
+    value_type : VARCHAR(32)
+    description : VARCHAR(255)
+    created_at : DATETIME
+    updated_at : DATETIME
+}
+
+' ============================================================
+' 关系定义
+' ============================================================
+
+t_task ||--o| t_environment : "1:1\n任务关联环境"
+t_environment ||--|{ t_container : "1:N\n环境包含容器"
+
+' ============================================================
+' 注释说明
+' ============================================================
+
+note right of t_task
+  <b>任务表</b>
+  记录 CI 系统提交的测试任务
+  --
+  状态流转:
+  PENDING → QUEUED → RUNNING → SUCCESS/FAILED
+end note
+
+note right of t_environment
+  <b>环境表</b>
+  记录测试环境实例
+  --
+  状态流转:
+  CREATING → READY → BUSY → RELEASING → IDLE
+end note
+
+note right of t_container
+  <b>容器表</b>
+  记录环境中的 Docker 容器
+  --
+  状态: CREATED, RUNNING, STOPPED, ERROR
+end note
+
+note bottom of t_diagnosis_cache
+  <b>诊断缓存表</b>
+  缓存 AI 诊断结果，避免重复分析
+  --
+  通过 log_hash 快速查找
+  hit_count 记录命中次数
+end note
+
+note bottom of t_system_config
+  <b>系统配置表</b>
+  存储运行时配置参数
+  --
+  如: 资源阈值、超时时间等
+end note
+
+@enduml

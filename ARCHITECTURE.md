@@ -1,428 +1,504 @@
 # Sentinel 系统架构设计文档
 
-**项目名称：** Sentinel：面向持续集成的容器化测试环境自适应管理智能体系统
-
-**版本：** v1.0
-
-**日期：** 2025-12-16
+**版本：** v2.0 (重构版)  
+**更新日期：** 2025-12-16  
+**架构模式：** 单体应用 + 嵌入式智能体
 
 ---
 
-## 产品概述
+## 一、架构概述
 
-Sentinel 是一个智能体系统，采用微服务架构设计，支持任务管理、资源监控、容器执行和AI分析等核心功能。系统基于 Java Spring Boot 技术栈构建，支持私有化部署和云端扩展。
+### 1.1 架构定位
 
-## 核心功能
+Sentinel 采用**单体 Spring Boot 应用**架构，所有组件运行在同一个 JVM 进程中。这是一个适合课程项目的务实选择：
 
-- **任务管理服务**：智能体任务的创建、调度、执行和状态追踪
-- **资源监控服务**：系统资源（CPU、内存、网络、存储）的实时监控和告警
-- **容器执行服务**：基于 Docker/K8s 的容器生命周期管理和编排
-- **AI分析服务**：集成 Ollama + Qwen2.5-7B 进行智能分析和决策
-- **API Gateway**：统一入口、认证鉴权、限流熔断、请求路由
-- **消息驱动**：基于 Kafka 的异步通信和事件驱动架构
+- ✅ 开发简单，无需管理多个服务
+- ✅ 部署方便，单个 JAR 文件即可运行
+- ✅ 调试容易，所有代码在同一进程
+- ✅ 资源节省，无需 Kafka、服务注册等中间件
 
-## 技术栈
+### 1.2 技术栈
 
-### 核心框架
+| 层次 | 技术选型 | 说明 |
+|------|----------|------|
+| 框架 | Spring Boot 3.2 | 主应用框架 |
+| 持久层 | MyBatis-Plus + MySQL 8.0 | 核心业务数据 |
+| 缓存 | Redis 7.0 | 诊断缓存、会话管理 |
+| 容器 | Docker Engine API v1.41 | 容器生命周期管理 |
+| AI | Ollama + Qwen2.5-7B | 本地大模型推理 |
+| 前端 | Thymeleaf + HTMX | 轻量级 Dashboard |
 
-- **编程语言**：Java 17 + Spring Boot 3.2
-- **微服务框架**：Spring Cloud 2023.x（Gateway、OpenFeign、LoadBalancer）
-- **API文档**：SpringDoc OpenAPI 3.0
-
-### 数据存储
-
-- **关系型数据库**：MySQL 8.0（核心业务数据）
-- **文档数据库**：MongoDB 5.0（日志、AI分析结果）
-- **缓存/队列**：Redis 7.0（分布式缓存、会话管理）
-
-### 消息队列
-
-- **Kafka 3.x**：高吞吐消息传递、事件溯源、服务解耦
-
-### 容器编排
-
-- **开发环境**：Docker Compose
-- **生产环境**：Kubernetes 1.28+
-
-### AI集成
-
-- **推理引擎**：Ollama
-- **模型**：Qwen2.5-7B 本地部署
-
-## 架构设计
-
-### 系统架构图
-
-```mermaid
-graph TB
-    subgraph Client["客户端层"]
-        CLI[CLI工具]
-        WebUI[Web控制台]
-        API_Client[API客户端]
-    end
-    
-    subgraph Gateway["网关层"]
-        APIGateway[API Gateway<br/>Spring Cloud Gateway]
-    end
-    
-    subgraph Services["微服务层"]
-        TaskService[任务管理服务<br/>task-service]
-        MonitorService[资源监控服务<br/>monitor-service]
-        ContainerService[容器执行服务<br/>container-service]
-        AIService[AI分析服务<br/>ai-service]
-    end
-    
-    subgraph MessageQueue["消息队列层"]
-        Kafka[Apache Kafka]
-    end
-    
-    subgraph DataLayer["数据层"]
-        MySQL[(MySQL 8.0<br/>核心业务)]
-        MongoDB[(MongoDB 5.0<br/>日志/AI结果)]
-        Redis[(Redis 7.0<br/>缓存/队列)]
-    end
-    
-    subgraph AI["AI推理层"]
-        Ollama[Ollama Server]
-        Qwen[Qwen2.5-7B]
-    end
-    
-    subgraph Container["容器运行时"]
-        Docker[Docker Engine]
-        K8s[Kubernetes]
-    end
-    
-    CLI --> APIGateway
-    WebUI --> APIGateway
-    API_Client --> APIGateway
-    
-    APIGateway --> TaskService
-    APIGateway --> MonitorService
-    APIGateway --> ContainerService
-    APIGateway --> AIService
-    
-    TaskService --> Kafka
-    MonitorService --> Kafka
-    ContainerService --> Kafka
-    AIService --> Kafka
-    
-    TaskService --> MySQL
-    TaskService --> Redis
-    MonitorService --> MongoDB
-    MonitorService --> Redis
-    ContainerService --> MySQL
-    AIService --> MongoDB
-    
-    AIService --> Ollama
-    Ollama --> Qwen
-    
-    ContainerService --> Docker
-    ContainerService --> K8s
-```
-
-### 微服务模块划分
-
-```mermaid
-graph LR
-    subgraph sentinel-gateway["sentinel-gateway"]
-        GW_Auth[认证鉴权]
-        GW_Route[路由转发]
-        GW_Limit[限流熔断]
-    end
-    
-    subgraph sentinel-task["sentinel-task-service"]
-        Task_CRUD[任务CRUD]
-        Task_Schedule[任务调度]
-        Task_State[状态机管理]
-    end
-    
-    subgraph sentinel-monitor["sentinel-monitor-service"]
-        Mon_Collect[指标采集]
-        Mon_Alert[告警引擎]
-        Mon_Report[报表生成]
-    end
-    
-    subgraph sentinel-container["sentinel-container-service"]
-        Con_Lifecycle[容器生命周期]
-        Con_Orchestrate[编排管理]
-        Con_Network[网络配置]
-    end
-    
-    subgraph sentinel-ai["sentinel-ai-service"]
-        AI_Inference[模型推理]
-        AI_Analysis[智能分析]
-        AI_Decision[决策建议]
-    end
-    
-    subgraph sentinel-common["sentinel-common"]
-        Common_Entity[公共实体]
-        Common_Utils[工具类]
-        Common_Config[配置类]
-    end
-```
-
-### 数据流程图
-
-```mermaid
-flowchart LR
-    User[用户请求] --> Gateway[API Gateway]
-    Gateway --> Auth{认证鉴权}
-    Auth -->|通过| Router[路由分发]
-    Auth -->|失败| Reject[拒绝访问]
-    
-    Router --> TaskSvc[任务服务]
-    Router --> MonitorSvc[监控服务]
-    Router --> ContainerSvc[容器服务]
-    Router --> AISvc[AI服务]
-    
-    TaskSvc --> |发布事件| Kafka[Kafka]
-    ContainerSvc --> |发布事件| Kafka
-    MonitorSvc --> |发布事件| Kafka
-    
-    Kafka --> |消费事件| AISvc
-    Kafka --> |消费事件| MonitorSvc
-    
-    TaskSvc --> MySQL[(MySQL)]
-    ContainerSvc --> MySQL
-    MonitorSvc --> MongoDB[(MongoDB)]
-    AISvc --> MongoDB
-    
-    AISvc --> Ollama[Ollama]
-    Ollama --> Response[AI响应]
-```
-
-## 模块划分
-
-### 1. sentinel-gateway（API网关）
-
-- **职责**：统一入口、认证授权、限流熔断、请求路由
-- **技术**：Spring Cloud Gateway、JWT、Resilience4j
-- **依赖**：Redis（令牌缓存）
-
-### 2. sentinel-task-service（任务管理服务）
-
-- **职责**：任务CRUD、任务调度、状态机管理、执行历史
-- **技术**：Spring Boot、MyBatis-Plus、Quartz
-- **依赖**：MySQL、Redis、Kafka
-
-### 3. sentinel-monitor-service（资源监控服务）
-
-- **职责**：指标采集、阈值告警、趋势分析、报表生成
-- **技术**：Spring Boot、Micrometer、Prometheus Client
-- **依赖**：MongoDB、Redis、Kafka
-
-### 4. sentinel-container-service（容器执行服务）
-
-- **职责**：容器生命周期管理、镜像管理、网络配置、日志采集
-- **技术**：Spring Boot、Docker Java Client、Kubernetes Client
-- **依赖**：MySQL、Docker/K8s API
-
-### 5. sentinel-ai-service（AI分析服务）
-
-- **职责**：模型推理、智能分析、决策建议、结果存储
-- **技术**：Spring Boot、OkHttp（Ollama API）
-- **依赖**：MongoDB、Ollama、Kafka
-
-### 6. sentinel-common（公共模块）
-
-- **职责**：公共实体、工具类、异常处理、配置类
-- **技术**：Java 17、Lombok、MapStruct
-
-## 数据流设计
-
-### 同步调用流程
+### 1.3 系统架构图
 
 ```
-Client -> Gateway -> Service -> Database -> Response
+┌─────────────────────────────────────────────────────────────┐
+│                    CI System (Jenkins/GitLab)                │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ HTTP POST /api/tasks
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  Sentinel Application (单体)                 │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │                   Controller Layer                   │   │
+│  │   TaskController  │  MonitorController  │  DiagnosisController   │
+│  └─────────────────────────────────────────────────────┘   │
+│                           │                                  │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │                    Service Layer                     │   │
+│  │   TaskService  │  EnvironmentService  │  DiagnosisService   │
+│  └─────────────────────────────────────────────────────┘   │
+│                           │                                  │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │               Agent Core (智能体核心)                │   │
+│  │  ┌──────────┐  ┌──────────────┐  ┌──────────────┐  │   │
+│  │  │Perceiver │  │DecisionEngine│  │   Actuator   │  │   │
+│  │  │ (感知器) │  │  (决策引擎)  │  │   (执行器)   │  │   │
+│  │  └────┬─────┘  └──────┬───────┘  └──────┬───────┘  │   │
+│  │       │               │                 │           │   │
+│  │  DockerSensor    RuleEngine(L1)    DockerActuator  │   │
+│  │  MetricsCollector LLMAdvisor(L2)   ComposeGenerator│   │
+│  └─────────────────────────────────────────────────────┘   │
+│                           │                                  │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │                 Infrastructure Layer                 │   │
+│  │   Docker Client  │  MySQL  │  Redis  │  Ollama API  │   │
+│  └─────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+                           │
+            ┌──────────────┼──────────────┐
+            ▼              ▼              ▼
+      ┌──────────┐  ┌──────────┐  ┌──────────┐
+      │  MySQL   │  │  Redis   │  │  Ollama  │
+      │ 8.0      │  │  7.0     │  │ Container│
+      └──────────┘  └──────────┘  └──────────┘
 ```
 
-### 异步事件流程
+---
+
+## 二、模块设计
+
+### 2.1 包结构
 
 ```
-Service -> Kafka Topic -> Consumer Service -> Process -> Store
+com.sentinel
+├── SentinelApplication.java          # 启动类
+├── controller/                        # 控制器层
+│   ├── TaskController.java           # 任务管理 API
+│   ├── MonitorController.java        # 监控 API
+│   └── DiagnosisController.java      # AI 诊断 API
+├── service/                           # 业务服务层
+│   ├── TaskService.java              # 任务业务逻辑
+│   ├── EnvironmentService.java       # 环境管理
+│   └── DiagnosisService.java         # 诊断服务
+├── agent/                             # 智能体核心
+│   ├── AgentBrain.java               # 智能体大脑（主循环）
+│   ├── perceiver/                    # 感知器模块
+│   │   ├── Perceiver.java            # 感知器接口
+│   │   ├── DockerSensor.java         # Docker 资源感知
+│   │   └── MetricsCollector.java     # 指标采集器
+│   ├── decision/                     # 决策引擎模块
+│   │   ├── DecisionEngine.java       # 决策引擎接口
+│   │   ├── RuleEngine.java           # L1: 规则引擎
+│   │   └── LLMAdvisor.java           # L2: LLM 顾问
+│   └── actuator/                     # 执行器模块
+│       ├── Actuator.java             # 执行器接口
+│       ├── DockerActuator.java       # Docker 操作执行
+│       └── ComposeGenerator.java     # Compose 文件生成
+├── domain/                            # 领域模型
+│   ├── Task.java                     # 任务实体
+│   ├── Environment.java              # 环境实体
+│   ├── Container.java                # 容器实体
+│   ├── Metrics.java                  # 监控指标
+│   └── DiagnosisResult.java          # 诊断结果
+├── mapper/                            # MyBatis Mapper
+│   ├── TaskMapper.java
+│   ├── EnvironmentMapper.java
+│   └── DiagnosisCacheMapper.java
+├── config/                            # 配置类
+│   ├── DockerConfig.java             # Docker 客户端配置
+│   ├── RedisConfig.java              # Redis 配置
+│   └── OllamaConfig.java             # Ollama 配置
+├── event/                             # Spring 事件（替代 Kafka）
+│   ├── TaskCreatedEvent.java
+│   ├── EnvironmentReadyEvent.java
+│   └── DiagnosisCompletedEvent.java
+└── util/                              # 工具类
+    ├── DockerUtils.java
+    └── LogHashUtils.java
 ```
 
-### Kafka Topic 设计
+### 2.2 核心组件职责
 
-| Topic名称 | 生产者 | 消费者 | 用途 |
-| --- | --- | --- | --- |
-| task-events | task-service | ai-service, monitor-service | 任务状态变更事件 |
-| container-events | container-service | task-service, monitor-service | 容器状态变更事件 |
-| monitor-alerts | monitor-service | task-service, ai-service | 监控告警事件 |
-| ai-results | ai-service | task-service | AI分析结果事件 |
+| 组件 | 职责 | 关键方法 |
+|------|------|----------|
+| **AgentBrain** | 智能体主循环，协调感知-决策-执行 | `mainLoop()`, `perceive()`, `decide()`, `execute()` |
+| **DockerSensor** | 采集 Docker 宿主机资源指标 | `getMetrics()`, `getContainerStats()` |
+| **RuleEngine** | 基于规则的快速决策（处理 80% 场景） | `decide(task, metrics)` |
+| **LLMAdvisor** | 调用 Ollama 进行复杂决策和诊断 | `analyze(log)`, `advise(context)` |
+| **DockerActuator** | 执行 Docker 容器操作 | `createEnvironment()`, `stopContainer()` |
+| **ComposeGenerator** | 动态生成 docker-compose.yml | `generate(dependencies)` |
 
-## 目录结构
+---
+
+## 三、数据模型
+
+### 3.1 核心实体（6 张表）
+
+根据需求分析，MVP 版本需要以下核心表：
 
 ```
-sentinel/
-├── sentinel-gateway/                 # API网关
-│   ├── src/main/java/
-│   │   └── com/sentinel/gateway/
-│   │       ├── config/              # 网关配置
-│   │       ├── filter/              # 过滤器
-│   │       └── handler/             # 异常处理
-│   └── src/main/resources/
-│       └── application.yml
-├── sentinel-task-service/            # 任务管理服务
-│   ├── src/main/java/
-│   │   └── com/sentinel/task/
-│   │       ├── controller/          # REST控制器
-│   │       ├── service/             # 业务逻辑
-│   │       ├── repository/          # 数据访问
-│   │       ├── entity/              # 实体类
-│   │       ├── dto/                 # 数据传输对象
-│   │       ├── event/               # 事件定义
-│   │       └── statemachine/        # 状态机
-│   └── src/main/resources/
-├── sentinel-monitor-service/         # 资源监控服务
-│   ├── src/main/java/
-│   │   └── com/sentinel/monitor/
-│   │       ├── controller/
-│   │       ├── service/
-│   │       ├── collector/           # 指标采集器
-│   │       ├── alert/               # 告警引擎
-│   │       └── repository/
-│   └── src/main/resources/
-├── sentinel-container-service/       # 容器执行服务
-│   ├── src/main/java/
-│   │   └── com/sentinel/container/
-│   │       ├── controller/
-│   │       ├── service/
-│   │       ├── docker/              # Docker客户端
-│   │       ├── kubernetes/          # K8s客户端
-│   │       └── repository/
-│   └── src/main/resources/
-├── sentinel-ai-service/              # AI分析服务
-│   ├── src/main/java/
-│   │   └── com/sentinel/ai/
-│   │       ├── controller/
-│   │       ├── service/
-│   │       ├── client/              # Ollama客户端
-│   │       ├── prompt/              # 提示词模板
-│   │       └── repository/
-│   └── src/main/resources/
-├── sentinel-common/                  # 公共模块
-│   └── src/main/java/
-│       └── com/sentinel/common/
-│           ├── entity/              # 公共实体
-│           ├── dto/                 # 公共DTO
-│           ├── exception/           # 异常定义
-│           ├── util/                # 工具类
-│           └── config/              # 公共配置
-├── docs/                             # 文档目录
-│   ├── uml/                         # UML图
-│   ├── api/                         # API文档
-│   └── architecture/                # 架构文档
-├── deploy/                           # 部署配置
-│   ├── docker/                      # Docker配置
-│   ├── kubernetes/                  # K8s配置
-│   └── scripts/                     # 部署脚本
-├── docker-compose.yml               # 开发环境编排
-├── docker-compose.prod.yml          # 生产环境编排
-└── pom.xml                          # Maven父POM
+┌─────────────┐     ┌─────────────────┐     ┌─────────────┐
+│   t_user    │     │     t_task      │────<│  t_environment  │────<│ t_container │
+│  (用户表)   │     │    (任务表)     │     │    (环境表)     │     │  (容器表)   │
+└─────────────┘     └─────────────────┘     └─────────────────┘     └─────────────┘
+                            │
+                            │
+                    ┌───────┴───────┐
+                    │               │
+            ┌───────────────┐  ┌────────────────┐
+            │t_diagnosis_cache│  │ t_system_config│
+            │  (诊断缓存表)  │  │  (系统配置表)  │
+            └───────────────┘  └────────────────┘
 ```
 
-## 数据库设计
+### 3.2 表结构概览
 
-### MySQL表结构（核心业务）
+| 表名 | 说明 | 核心字段 |
+|------|------|----------|
+| `t_user` | 用户信息 | id, username, password, email, role, enabled |
+| `t_task` | 任务记录 | id, task_code, service_id, test_type, status, created_at |
+| `t_environment` | 测试环境 | id, env_code, task_id, status, compose_content, access_url |
+| `t_container` | 容器实例 | id, environment_id, container_id, image, status |
+| `t_diagnosis_cache` | AI 诊断缓存 | log_hash, root_cause, solutions, hit_count |
+| `t_system_config` | 系统配置 | config_key, config_value, description |
 
-```sql
--- 任务表
-CREATE TABLE t_task (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    name VARCHAR(200) NOT NULL,
-    description TEXT,
-    type VARCHAR(50) NOT NULL,
-    status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
-    priority INT DEFAULT 0,
-    config JSON,
-    creator_id BIGINT,
-    scheduled_at DATETIME,
-    started_at DATETIME,
-    completed_at DATETIME,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_status (status),
-    INDEX idx_type (type),
-    INDEX idx_creator (creator_id)
-);
+---
 
--- 容器表
-CREATE TABLE t_container (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    container_id VARCHAR(100) NOT NULL,
-    name VARCHAR(200) NOT NULL,
-    image VARCHAR(500) NOT NULL,
-    status VARCHAR(50) NOT NULL,
-    task_id BIGINT,
-    config JSON,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_container_id (container_id),
-    INDEX idx_task (task_id)
-);
-```
+## 四、接口设计
 
-### MongoDB集合设计（日志/AI结果）
+### 4.1 核心 API（15 个）
 
-```javascript
-// 监控指标集合
-db.metrics.createIndex({ "timestamp": -1, "type": 1 });
-{
-    _id: ObjectId,
-    type: "cpu|memory|network|disk",
-    value: Number,
-    unit: String,
-    source: String,
-    tags: { host: String, container: String },
-    timestamp: ISODate
-}
+MVP 版本聚焦于核心功能，只实现必要的 API：
 
-// AI分析结果集合
-db.ai_results.createIndex({ "taskId": 1, "createdAt": -1 });
-{
-    _id: ObjectId,
-    taskId: Long,
-    prompt: String,
-    response: String,
-    model: "qwen2.5-7b",
-    tokens: { input: Number, output: Number },
-    latency: Number,
-    createdAt: ISODate
-}
-```
-
-## 技术考量
-
-### 性能优化
-
-- Redis缓存热点数据（任务状态、用户会话）
-- Kafka批量消费提升吞吐
-- MongoDB索引优化查询性能
-- 连接池配置（HikariCP、Lettuce）
-
-### 安全措施
-
-- JWT令牌认证 + Redis令牌黑名单
-- API限流（Resilience4j RateLimiter）
-- 敏感配置加密（Jasypt）
-- 容器安全策略（非root运行、资源限制）
-
-### 可扩展性
-
-- 微服务无状态设计，支持水平扩展
-- Kafka分区支持消费者扩展
-- K8s HPA自动伸缩配置
-
-## 开发计划
-
-| 序号 | 任务 | 依赖 |
+#### 认证接口（2 个）
+| 方法 | 路径 | 说明 |
 |------|------|------|
-| 1 | 探索现有项目结构 | - |
-| 2 | 创建 UML 建模文档 | 1 |
-| 3 | 设计数据库 Schema | 2 |
-| 4 | 定义 API 接口规范 | 3 |
-| 5 | 设计 Kafka 消息规范 | 4 |
-| 6 | 创建 Maven 多模块项目结构 | 5 |
-| 7 | 编写 Docker Compose 配置 | 6 |
-| 8 | 编写 Kubernetes 部署配置 | 7 |
+| POST | `/api/auth/login` | 用户登录 |
+| GET | `/api/auth/me` | 获取当前用户信息 |
+
+#### 任务管理（6 个）
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/tasks` | 任务列表 |
+| POST | `/api/tasks` | 创建任务 |
+| GET | `/api/tasks/{id}` | 查询任务详情 |
+| GET | `/api/tasks/{id}/status` | 查询任务状态 |
+| GET | `/api/tasks/{id}/logs` | 获取任务日志 |
+| DELETE | `/api/tasks/{id}` | 取消任务 |
+
+#### 环境管理（3 个）
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/environments` | 环境列表 |
+| GET | `/api/environments/{id}` | 环境详情 |
+| POST | `/api/environments/{id}/release` | 释放环境 |
+
+#### 监控指标（2 个）
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/metrics` | 系统资源指标 |
+| GET | `/api/metrics/health` | 健康检查 |
+
+#### AI 诊断（2 个）
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/diagnosis/{taskId}` | 获取诊断结果 |
+| POST | `/api/diagnosis/{taskId}` | 请求 AI 诊断 |
+
+### 4.2 统一响应格式
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": { ... },
+  "timestamp": 1702713600000
+}
+```
+
+### 4.3 错误码定义
+
+| 错误码 | 说明 |
+|--------|------|
+| `TASK_001` | 任务不存在 |
+| `TASK_002` | 任务状态不允许该操作 |
+| `ENV_001` | 环境创建失败 |
+| `ENV_002` | 无可用资源，已加入等待队列 |
+| `ENV_003` | 环境启动超时 |
+| `AI_001` | Ollama 服务不可用 |
+| `AI_002` | 诊断超时 |
+| `SYS_001` | 系统内部错误 |
+
+---
+
+## 五、智能体设计
+
+### 5.1 感知-决策-执行循环
+
+```java
+public class AgentBrain {
+    
+    @Scheduled(fixedDelay = 5000)  // 每 5 秒执行一次
+    public void mainLoop() {
+        // 1. 感知：从队列获取待处理任务
+        Task task = taskQueue.poll();
+        if (task == null) return;
+        
+        // 2. 感知：获取系统资源状态
+        Metrics metrics = dockerSensor.getMetrics();
+        
+        // 3. 决策：根据规则或 LLM 做出决策
+        Decision decision = decisionEngine.decide(task, metrics);
+        
+        // 4. 执行：执行决策动作
+        ActionResult result = actuator.execute(decision);
+        
+        // 5. 学习：失败时调用 AI 分析并缓存
+        if (result.isFailed()) {
+            diagnosisService.analyzeAndCache(result);
+        }
+    }
+}
+```
+
+### 5.2 决策规则（L1 规则引擎）
+
+| 条件 | 动作 | 说明 |
+|------|------|------|
+| 内存 < 60% | CREATE_NOW | 资源充足，立即创建 |
+| 内存 60-80% && 队列 < 3 | CREATE_NOW | 可承受波动 |
+| 内存 60-80% && 队列 >= 3 | ENQUEUE | 避免雪崩 |
+| 内存 > 80% | ENQUEUE + ALERT | 接近 OOM |
+| 有匹配的空闲环境 | REUSE | 复用环境，节省时间 |
+
+### 5.3 LLM 调用场景（L2）
+
+仅在以下场景调用 Ollama：
+
+1. **环境启动失败** - 分析容器日志，给出诊断建议
+2. **复杂依赖解析** - 解析非标准的服务依赖关系
+3. **异常模式识别** - 识别规则引擎无法处理的异常场景
+
+---
+
+## 六、事件驱动（替代 Kafka）
+
+单体应用使用 **Spring Events** 实现模块间解耦：
+
+```java
+// 定义事件
+public record TaskCreatedEvent(Long taskId, String serviceId, TestType testType) {}
+
+// 发布事件
+@Service
+public class TaskService {
+    @Autowired
+    private ApplicationEventPublisher eventPublisher;
+    
+    public Task createTask(TaskRequest request) {
+        Task task = saveTask(request);
+        eventPublisher.publishEvent(new TaskCreatedEvent(task.getId(), ...));
+        return task;
+    }
+}
+
+// 监听事件
+@Component
+public class AgentBrain {
+    @EventListener
+    public void onTaskCreated(TaskCreatedEvent event) {
+        // 处理新任务
+        taskQueue.offer(event);
+    }
+}
+```
+
+### 事件类型
+
+| 事件 | 发布者 | 监听者 | 说明 |
+|------|--------|--------|------|
+| `TaskCreatedEvent` | TaskService | AgentBrain | 新任务入队 |
+| `EnvironmentReadyEvent` | DockerActuator | TaskService | 环境就绪通知 |
+| `EnvironmentFailedEvent` | DockerActuator | DiagnosisService | 触发 AI 诊断 |
+| `DiagnosisCompletedEvent` | DiagnosisService | TaskService | 诊断结果回调 |
+
+---
+
+## 七、部署架构
+
+### 7.1 开发环境
+
+使用 Docker Compose 启动依赖服务：
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+services:
+  mysql:
+    image: mysql:8.0
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: sentinel
+      MYSQL_DATABASE: sentinel
+      
+  redis:
+    image: redis:7.0-alpine
+    ports:
+      - "6379:6379"
+      
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+      
+volumes:
+  ollama_data:
+```
+
+### 7.2 应用启动
+
+```bash
+# 1. 启动依赖服务
+docker-compose up -d
+
+# 2. 拉取 AI 模型（首次）
+docker exec -it ollama ollama pull qwen2.5:7b
+
+# 3. 启动应用
+./mvnw spring-boot:run
+```
+
+### 7.3 生产部署
+
+```bash
+# 打包
+./mvnw clean package -DskipTests
+
+# 运行
+java -jar target/sentinel-1.0.0.jar \
+  --spring.profiles.active=prod \
+  --server.port=8080
+```
+
+---
+
+## 八、安全设计
+
+### 8.1 API 安全
+
+- **JWT 认证**：所有 API 需携带有效 Token
+- **Token 有效期**：24 小时
+- **刷新机制**：支持 Token 刷新
+
+### 8.2 容器安全
+
+```yaml
+# 容器安全配置模板
+security_opt:
+  - no-new-privileges:true
+cap_drop:
+  - ALL
+read_only: true
+tmpfs:
+  - /tmp
+```
+
+### 8.3 敏感信息
+
+- 数据库密码：通过环境变量注入
+- AI 分析前：自动脱敏日志中的密码、密钥
+
+---
+
+## 九、监控与可观测性
+
+### 9.1 健康检查
+
+```
+GET /api/health
+
+{
+  "status": "UP",
+  "components": {
+    "mysql": "UP",
+    "redis": "UP",
+    "docker": "UP",
+    "ollama": "UP"
+  }
+}
+```
+
+### 9.2 Prometheus 指标
+
+```
+# 应用指标
+sentinel_tasks_total{status="success|failed"}
+sentinel_environments_active
+sentinel_diagnosis_cache_hit_rate
+sentinel_decision_latency_seconds
+
+# JVM 指标（Spring Boot Actuator 自动暴露）
+jvm_memory_used_bytes
+jvm_threads_live
+```
+
+---
+
+## 十、扩展路线图
+
+当前 MVP 版本完成后，可按以下路径演进：
+
+```
+MVP (单体)
+    │
+    ├─ Phase 1: 功能增强
+    │   ├─ 支持更多测试类型
+    │   ├─ Dashboard 可视化
+    │   └─ 告警通知（钉钉/邮件）
+    │
+    ├─ Phase 2: 性能优化
+    │   ├─ 环境预热池
+    │   ├─ 并行任务处理
+    │   └─ 缓存优化
+    │
+    └─ Phase 3: 架构演进（如需）
+        ├─ 拆分为微服务
+        ├─ 引入 Kafka
+        └─ 多集群调度
+```
+
+---
+
+## 附录
+
+### A. 与需求分析的对应关系
+
+| 需求编号 | 需求描述 | 实现模块 |
+|----------|----------|----------|
+| FR-1 | 任务感知与解析 | AgentBrain + Perceiver |
+| FR-2 | 环境状态监控 | DockerSensor + MetricsCollector |
+| FR-3 | 智能决策引擎 | RuleEngine + LLMAdvisor |
+| FR-4 | 容器生命周期执行 | DockerActuator + ComposeGenerator |
+| FR-5 | 故障诊断 | DiagnosisService + LLMAdvisor |
+
+### B. 技术决策记录
+
+| 决策 | 选择 | 理由 |
+|------|------|------|
+| 架构模式 | 单体应用 | 适合课程项目规模，开发部署简单 |
+| 消息通信 | Spring Events | 单体应用无需 Kafka 的复杂性 |
+| 数据库 | 仅 MySQL | 简化运维，Redis 仅用于缓存 |
+| 前端 | Thymeleaf + HTMX | 轻量级，无需前后端分离 |

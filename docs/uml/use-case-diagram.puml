@@ -20,7 +20,6 @@ actor "系统管理员" as Admin <<人员>>
 ' 外部系统
 actor "Docker Engine" as Docker <<外部系统>>
 actor "Ollama AI" as Ollama <<外部系统>>
-actor "Kafka" as Kafka <<外部系统>>
 
 ' ============================================
 ' 系统边界
@@ -122,8 +121,6 @@ UC_StartContainer --> Docker : 调用Docker API
 UC_StopContainer --> Docker : 调用Docker API
 UC_CollectMetrics --> Docker : 获取容器指标
 UC_Diagnose --> Ollama : 调用AI分析
-UC_CreateEnv --> Kafka : 发布任务事件
-UC_CollectMetrics --> Kafka : 发布指标数据
 
 ' ============================================
 ' 注释

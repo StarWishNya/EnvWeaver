@@ -1,0 +1,427 @@
+# ============================================================
+# Sentinel 安全设计规范
+# ============================================================
+# 版本: 1.0.0
+# 日期: 2025-12-16
+# ============================================================
+
+metadata:
+  name: Sentinel Security Specification
+  version: 1.0.0
+  description: 单体应用安全设计规范
+
+# ============================================================
+# 1. 认证与授权
+# ============================================================
+authentication:
+  type: JWT
+  config:
+    algorithm: HS256
+    access_token_expiry: 7200  # 2小时
+    refresh_token_expiry: 604800  # 7天
+    issuer: sentinel
+    
+  token_storage:
+    type: Redis
+    key_pattern: "auth:token:{userId}"
+    
+  blacklist:
+    enabled: true
+    key_pattern: "auth:blacklist:{tokenHash}"
+    ttl: 7200  # 与 access_token_expiry 一致
+
+authorization:
+  roles:
+    - name: ADMIN
+      permissions:
+        - "task:*"
+        - "environment:*"
+        - "diagnosis:*"
+        - "metrics:*"
+        - "config:*"
+        - "user:*"
+    - name: USER
+      permissions:
+        - "task:create"
+        - "task:read"
+        - "task:cancel"
+        - "environment:read"
+        - "diagnosis:read"
+        - "metrics:read"
+
+# ============================================================
+# 2. 容器安全
+# ============================================================
+container_security:
+  # 安全上下文配置
+  security_context:
+    run_as_non_root: true
+    run_as_user: 1000
+    run_as_group: 1000
+    read_only_root_filesystem: true
+    allow_privilege_escalation: false
+    
+  # 能力限制
+  capabilities:
+    drop:
+      - ALL
+    add: []  # 不添加任何额外能力
+    
+  # 资源限制
+  resource_limits:
+    default:
+      cpu: "1.0"
+      memory: "1024m"
+    max:
+      cpu: "4.0"
+      memory: "4096m"
+      
+  # 网络策略
+  network:
+    # 禁止容器访问宿主机网络
+    host_network: false
+    # 禁止容器访问特权端口
+    privileged_ports: false
+    
+  # 挂载限制
+  volumes:
+    # 禁止挂载敏感目录
+    forbidden_paths:
+      - /etc/passwd
+      - /etc/shadow
+      - /root
+      - /var/run/docker.sock
+    # 只读挂载
+    read_only_mounts:
+      - /app/config
+
+# ============================================================
+# 3. 输入验证
+# ============================================================
+input_validation:
+  # 任务名称
+  task_name:
+    pattern: "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$"
+    max_length: 100
+    
+  # Docker 镜像名称
+  image_name:
+    pattern: "^[a-z0-9][a-z0-9._/-]{0,127}(:[a-zA-Z0-9._-]{1,128})?$"
+    max_length: 256
+    # 白名单（可选）
+    whitelist:
+      - "maven:*"
+      - "openjdk:*"
+      - "node:*"
+      - "python:*"
+      - "golang:*"
+      
+  # 命令
+  command:
+    max_length: 1000
+    # 禁止的命令模式（防止命令注入）
+    forbidden_patterns:
+      # 文件系统破坏
+      - "rm\\s+-rf\\s+/"
+      - "rm\\s+-rf\\s+/\\*"
+      - "rm\\s+-rf\\s+~"
+      - "rm\\s+-rf\\s+\\$HOME"
+      - "mkfs"
+      - "dd\\s+if="
+      - ">\\s*/dev/"
+      # 权限修改
+      - "chmod\\s+777"
+      - "chmod\\s+-R\\s+777"
+      - "chown\\s+-R\\s+root"
+      - "chattr"
+      # 远程代码执行
+      - "curl.*\\|.*sh"
+      - "curl.*\\|.*bash"
+      - "wget.*\\|.*sh"
+      - "wget.*\\|.*bash"
+      - "curl.*-o.*&&.*sh"
+      - "wget.*-O.*&&.*sh"
+      # 系统挂载
+      - "mount\\s+-o\\s+remount"
+      - "umount\\s+/"
+      # 网络危险操作
+      - "nc\\s+-l"
+      - "ncat\\s+-l"
+      - "socat"
+      # 反弹 Shell
+      - "bash\\s+-i\\s+>&"
+      - "/dev/tcp/"
+      - "python.*socket"
+      - "perl.*socket"
+      
+  # 环境变量
+  env_vars:
+    key_pattern: "^[A-Z][A-Z0-9_]{0,63}$"
+    value_max_length: 4096
+    # 禁止覆盖的环境变量
+    protected_keys:
+      - PATH
+      - HOME
+      - USER
+
+# ============================================================
+# 4. 敏感信息管理
+# ============================================================
+secrets_management:
+  # 数据库密码
+  database:
+    source: environment_variable
+    key: SENTINEL_DB_PASSWORD
+    
+  # Redis 密码
+  redis:
+    source: environment_variable
+    key: SENTINEL_REDIS_PASSWORD
+    
+  # JWT 密钥
+  jwt_secret:
+    source: environment_variable
+    key: SENTINEL_JWT_SECRET
+    min_length: 32
+    
+  # Ollama API（如需认证）
+  ollama:
+    source: environment_variable
+    key: SENTINEL_OLLAMA_API_KEY
+
+# ============================================================
+# 5. 日志安全
+# ============================================================
+logging_security:
+  # 敏感字段脱敏
+  sensitive_fields:
+    - password
+    - token
+    - secret
+    - api_key
+    - authorization
+    
+  # 脱敏规则
+  masking:
+    pattern: "***REDACTED***"
+    
+  # 日志级别
+  levels:
+    production: INFO
+    development: DEBUG
+
+# ============================================================
+# 6. 错误码定义
+# ============================================================
+error_codes:
+  # 1xxx: 认证相关
+  authentication:
+    - code: 1001
+      message: "用户名或密码错误"
+      http_status: 401
+    - code: 1002
+      message: "Token 已过期"
+      http_status: 401
+    - code: 1003
+      message: "Token 无效"
+      http_status: 401
+    - code: 1004
+      message: "权限不足"
+      http_status: 403
+    - code: 1005
+      message: "用户已被禁用"
+      http_status: 403
+      
+  # 2xxx: 任务相关
+  task:
+    - code: 2001
+      message: "任务不存在"
+      http_status: 404
+    - code: 2002
+      message: "任务状态不允许该操作"
+      http_status: 400
+    - code: 2003
+      message: "任务创建失败"
+      http_status: 500
+    - code: 2004
+      message: "任务已取消"
+      http_status: 400
+    - code: 2005
+      message: "任务执行超时"
+      http_status: 500
+    - code: 2006
+      message: "任务参数无效"
+      http_status: 400
+      
+  # 3xxx: 环境相关
+  environment:
+    - code: 3001
+      message: "环境不存在"
+      http_status: 404
+    - code: 3002
+      message: "无可用环境"
+      http_status: 503
+    - code: 3003
+      message: "环境创建失败"
+      http_status: 500
+    - code: 3004
+      message: "环境已被占用"
+      http_status: 409
+    - code: 3005
+      message: "环境释放失败"
+      http_status: 500
+      
+  # 4xxx: AI 诊断相关
+  diagnosis:
+    - code: 4001
+      message: "AI 服务不可用"
+      http_status: 503
+    - code: 4002
+      message: "诊断超时"
+      http_status: 504
+    - code: 4003
+      message: "诊断结果不存在"
+      http_status: 404
+    - code: 4004
+      message: "诊断请求过于频繁"
+      http_status: 429
+      
+  # 5xxx: 系统相关
+  system:
+    - code: 5001
+      message: "系统内部错误"
+      http_status: 500
+    - code: 5002
+      message: "Docker 服务不可用"
+      http_status: 503
+    - code: 5003
+      message: "资源不足"
+      http_status: 503
+    - code: 5004
+      message: "数据库连接失败"
+      http_status: 503
+    - code: 5005
+      message: "Redis 连接失败"
+      http_status: 503
+    - code: 5006
+      message: "请求参数无效"
+      http_status: 400
+
+# ============================================================
+# 7. 速率限制
+# ============================================================
+rate_limiting:
+  enabled: true
+  
+  rules:
+    # 全局限制
+    global:
+      requests_per_second: 100
+      burst: 200
+      
+    # 登录接口
+    login:
+      path: "/api/auth/login"
+      requests_per_minute: 10
+      block_duration: 300  # 5分钟
+      
+    # 任务创建
+    task_create:
+      path: "/api/tasks"
+      method: POST
+      requests_per_minute: 30
+      
+    # AI 诊断
+    diagnosis:
+      path: "/api/diagnosis/*"
+      method: POST
+      requests_per_minute: 10
+
+# ============================================================
+# 8. 代码示例
+# ============================================================
+code_examples:
+  # 容器安全配置
+  docker_security: |
+    @Component
+    public class ContainerSecurityConfig {
+        public HostConfig buildSecureHostConfig(ResourceLimits limits) {
+            return HostConfig.builder()
+                // 资源限制
+                .cpuQuota((long) (Double.parseDouble(limits.getCpuLimit()) * 100000))
+                .memory(parseMemory(limits.getMemoryLimit()))
+                // 安全配置
+                .privileged(false)
+                .readonlyRootfs(true)
+                .capDrop(List.of("ALL"))
+                // 用户配置
+                .user("1000:1000")
+                .build();
+        }
+    }
+
+  # 输入验证
+  input_validation: |
+    @Component
+    public class TaskRequestValidator {
+        private static final Pattern IMAGE_PATTERN = 
+            Pattern.compile("^[a-z0-9][a-z0-9._/-]{0,127}(:[a-zA-Z0-9._-]{1,128})?$");
+        
+        private static final List<String> FORBIDDEN_COMMANDS = List.of(
+            "rm -rf /", "mkfs", "dd if=", "> /dev/"
+        );
+        
+        public void validate(CreateTaskRequest request) {
+            // 验证镜像名称
+            if (!IMAGE_PATTERN.matcher(request.getImage()).matches()) {
+                throw new ValidationException(2006, "无效的镜像名称");
+            }
+            
+            // 检查禁止的命令
+            String command = request.getCommand();
+            for (String forbidden : FORBIDDEN_COMMANDS) {
+                if (command.contains(forbidden)) {
+                    throw new ValidationException(2006, "命令包含禁止的模式");
+                }
+            }
+        }
+    }
+
+  # 统一异常处理
+  exception_handler: |
+    @RestControllerAdvice
+    @Slf4j
+    public class GlobalExceptionHandler {
+        
+        @ExceptionHandler(BusinessException.class)
+        public ResponseEntity<ApiResponse<?>> handleBusinessException(BusinessException e) {
+            log.warn("业务异常: code={}, message={}", e.getCode(), e.getMessage());
+            return ResponseEntity
+                .status(e.getHttpStatus())
+                .body(ApiResponse.error(e.getCode(), e.getMessage()));
+        }
+        
+        @ExceptionHandler(Exception.class)
+        public ResponseEntity<ApiResponse<?>> handleException(Exception e) {
+            log.error("系统异常", e);
+            return ResponseEntity
+                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ApiResponse.error(5001, "系统内部错误"));
+        }
+    }
+
+  # 日志脱敏
+  log_masking: |
+    @Component
+    public class SensitiveDataMasker {
+        private static final Set<String> SENSITIVE_FIELDS = Set.of(
+            "password", "token", "secret", "apiKey", "authorization"
+        );
+        
+        public String mask(String fieldName, String value) {
+            if (SENSITIVE_FIELDS.contains(fieldName.toLowerCase())) {
+                return "***REDACTED***";
+            }
+            return value;
+        }
+    }

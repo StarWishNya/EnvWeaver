@@ -1,0 +1,907 @@
+openapi: 3.0.3
+info:
+  title: Sentinel API
+  description: |
+    Sentinel 智能体系统 API 接口规范
+    
+    ## 架构说明
+    - 单体 Spring Boot 应用
+    - 15 个核心 API 接口
+    - JWT Bearer 认证
+    
+    ## 设计原则
+    - RESTful 风格
+    - 统一响应格式
+    - 精简 MVP 范围
+  version: 1.0.0
+  contact:
+    name: Sentinel Team
+
+servers:
+  - url: http://localhost:8080/api
+    description: 开发环境
+
+tags:
+  - name: Auth
+    description: 认证接口
+  - name: Task
+    description: 任务管理
+  - name: Environment
+    description: 环境管理
+  - name: Metrics
+    description: 监控指标
+  - name: Diagnosis
+    description: AI 诊断
+
+# ============================================================
+# 安全定义
+# ============================================================
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  # ============================================================
+  # 通用响应格式
+  # ============================================================
+  schemas:
+    # 统一响应格式
+    ApiResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          description: 业务状态码
+          example: 200
+        message:
+          type: string
+          description: 响应消息
+          example: success
+        data:
+          type: object
+          description: 响应数据
+        timestamp:
+          type: integer
+          format: int64
+          description: 时间戳
+          example: 1702700000000
+
+    # 分页响应
+    PageResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 200
+        message:
+          type: string
+          example: success
+        data:
+          type: object
+          properties:
+            content:
+              type: array
+              items: {}
+            page:
+              type: integer
+              example: 0
+            size:
+              type: integer
+              example: 20
+            totalElements:
+              type: integer
+              example: 100
+            totalPages:
+              type: integer
+              example: 5
+
+    # ============================================================
+    # 错误码定义
+    # ============================================================
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          description: 错误码
+        message:
+          type: string
+          description: 错误消息
+        details:
+          type: string
+          description: 详细信息
+        timestamp:
+          type: integer
+          format: int64
+
+    # ============================================================
+    # 业务模型
+    # ============================================================
+    
+    # 登录请求
+    LoginRequest:
+      type: object
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 50
+          example: admin
+        password:
+          type: string
+          minLength: 6
+          maxLength: 100
+          format: password
+          example: "******"
+
+    # 登录响应
+    LoginResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+          description: JWT 访问令牌
+        refreshToken:
+          type: string
+          description: 刷新令牌
+        expiresIn:
+          type: integer
+          description: 过期时间(秒)
+          example: 7200
+        tokenType:
+          type: string
+          example: Bearer
+
+    # 用户信息
+    UserInfo:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        username:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+          enum: [ADMIN, USER]
+
+    # 任务
+    Task:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        taskCode:
+          type: string
+          description: 任务编码(如 build-1234)
+          example: "build-1234"
+        serviceId:
+          type: string
+          description: 服务标识(如 user-service)
+          example: "user-service"
+        testType:
+          type: string
+          enum: [UNIT_TEST, INTEGRATION_TEST, E2E_TEST]
+          description: 测试类型
+        dependencies:
+          type: array
+          items:
+            type: string
+          description: 依赖列表
+        status:
+          type: string
+          enum: [PENDING, QUEUED, RUNNING, SUCCESS, FAILED, CANCELLED]
+        priority:
+          type: integer
+          minimum: 1
+          maximum: 10
+          example: 5
+        environmentId:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        errorMessage:
+          type: string
+
+    # 创建任务请求
+    CreateTaskRequest:
+      type: object
+      required:
+        - taskCode
+        - serviceId
+        - testType
+      properties:
+        taskCode:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: 任务编码(如 build-1234)
+          example: "build-1234"
+        serviceId:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: 服务标识(如 user-service)
+          example: "user-service"
+        testType:
+          type: string
+          enum: [UNIT_TEST, INTEGRATION_TEST, E2E_TEST]
+          description: 测试类型
+        dependencies:
+          type: array
+          items:
+            type: string
+          description: 依赖列表
+          example: ["mysql:8.0", "redis:7.0"]
+        priority:
+          type: integer
+          minimum: 1
+          maximum: 10
+          default: 5
+
+    # 资源限制
+    ResourceLimits:
+      type: object
+      properties:
+        cpuLimit:
+          type: string
+          example: "2.0"
+          description: CPU 核心数
+        memoryLimit:
+          type: string
+          example: "2048m"
+          description: 内存限制
+        diskLimit:
+          type: string
+          example: "10g"
+          description: 磁盘限制
+
+    # 环境
+    Environment:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        envCode:
+          type: string
+          description: 环境编码(如 env-abc123)
+          example: "env-abc123"
+        status:
+          type: string
+          enum: [CREATING, READY, BUSY, RELEASING, IDLE, ERROR]
+          description: "状态: CREATING-创建中, READY-就绪, BUSY-使用中, RELEASING-释放中, IDLE-空闲, ERROR-错误"
+        taskId:
+          type: integer
+          format: int64
+        composeContent:
+          type: string
+          description: 生成的 docker-compose.yml 内容
+        accessUrl:
+          type: string
+          description: 访问地址
+        portMappings:
+          type: object
+          additionalProperties:
+            type: integer
+          description: 端口映射
+          example: {"mysql": 33061, "redis": 63791}
+        resourceUsage:
+          type: object
+          properties:
+            cpu:
+              type: number
+            memory:
+              type: integer
+          description: 资源使用情况
+        expiresAt:
+          type: string
+          format: date-time
+          description: 过期时间(用于自动回收)
+        createdAt:
+          type: string
+          format: date-time
+
+    # 系统指标
+    SystemMetrics:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        cpu:
+          type: object
+          properties:
+            usage:
+              type: number
+              format: double
+              description: CPU 使用率 (0-100)
+            cores:
+              type: integer
+        memory:
+          type: object
+          properties:
+            used:
+              type: integer
+              format: int64
+              description: 已用内存 (bytes)
+            total:
+              type: integer
+              format: int64
+              description: 总内存 (bytes)
+            usage:
+              type: number
+              format: double
+              description: 内存使用率 (0-100)
+        disk:
+          type: object
+          properties:
+            used:
+              type: integer
+              format: int64
+            total:
+              type: integer
+              format: int64
+            usage:
+              type: number
+              format: double
+        containers:
+          type: object
+          properties:
+            running:
+              type: integer
+            paused:
+              type: integer
+            stopped:
+              type: integer
+
+    # AI 诊断结果
+    DiagnosisResult:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        taskId:
+          type: integer
+          format: int64
+        errorType:
+          type: string
+          enum: [RESOURCE_EXHAUSTED, NETWORK_ERROR, DEPENDENCY_FAILURE, TIMEOUT, CONFIG_ERROR, UNKNOWN]
+        severity:
+          type: string
+          enum: [LOW, MEDIUM, HIGH, CRITICAL]
+        summary:
+          type: string
+          description: 问题摘要
+        rootCause:
+          type: string
+          description: 根因分析
+        suggestions:
+          type: array
+          items:
+            type: string
+          description: 修复建议
+        confidence:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+          description: 置信度
+        fromCache:
+          type: boolean
+          description: 是否来自缓存
+        createdAt:
+          type: string
+          format: date-time
+
+# ============================================================
+# API 路径定义 (15 个核心接口)
+# ============================================================
+paths:
+  # ============================================================
+  # 1. 认证接口 (2个)
+  # ============================================================
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: 用户登录
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: 认证失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: 获取当前用户信息
+      operationId: getCurrentUser
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/UserInfo'
+
+  # ============================================================
+  # 2. 任务管理接口 (6个)
+  # ============================================================
+  /tasks:
+    get:
+      tags: [Task]
+      summary: 获取任务列表
+      operationId: listTasks
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [PENDING, QUEUED, RUNNING, SUCCESS, FAILED, CANCELLED]
+        - name: testType
+          in: query
+          schema:
+            type: string
+            enum: [UNIT_TEST, INTEGRATION_TEST, E2E_TEST]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          content:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/Task'
+
+    post:
+      tags: [Task]
+      summary: 创建任务
+      operationId: createTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTaskRequest'
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Task'
+        '400':
+          description: 参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /tasks/{taskId}:
+    get:
+      tags: [Task]
+      summary: 获取任务详情
+      operationId: getTask
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Task'
+        '404':
+          description: 任务不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags: [Task]
+      summary: 取消任务
+      operationId: cancelTask
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: 取消成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+        '400':
+          description: 任务状态不允许取消
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /tasks/{taskId}/status:
+    get:
+      tags: [Task]
+      summary: 获取任务状态
+      operationId: getTaskStatus
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          taskId:
+                            type: integer
+                            format: int64
+                          status:
+                            type: string
+                          progress:
+                            type: integer
+                            minimum: 0
+                            maximum: 100
+
+  /tasks/{taskId}/logs:
+    get:
+      tags: [Task]
+      summary: 获取任务日志
+      operationId: getTaskLogs
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: tail
+          in: query
+          description: 返回最后 N 行
+          schema:
+            type: integer
+            default: 100
+        - name: since
+          in: query
+          description: 从指定时间开始
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          logs:
+                            type: string
+                          hasMore:
+                            type: boolean
+
+  # ============================================================
+  # 3. 环境管理接口 (3个)
+  # ============================================================
+  /environments:
+    get:
+      tags: [Environment]
+      summary: 获取环境列表
+      operationId: listEnvironments
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [CREATING, READY, BUSY, RELEASING, IDLE, ERROR]
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Environment'
+
+  /environments/{envId}:
+    get:
+      tags: [Environment]
+      summary: 获取环境详情
+      operationId: getEnvironment
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Environment'
+
+  /environments/{envId}/release:
+    post:
+      tags: [Environment]
+      summary: 释放环境
+      operationId: releaseEnvironment
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: 释放成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  # ============================================================
+  # 4. 监控指标接口 (2个)
+  # ============================================================
+  /metrics:
+    get:
+      tags: [Metrics]
+      summary: 获取系统指标
+      operationId: getSystemMetrics
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SystemMetrics'
+
+  /metrics/health:
+    get:
+      tags: [Metrics]
+      summary: 健康检查
+      operationId: healthCheck
+      security: []
+      responses:
+        '200':
+          description: 服务健康
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: UP
+                  components:
+                    type: object
+                    properties:
+                      db:
+                        type: string
+                        example: UP
+                      redis:
+                        type: string
+                        example: UP
+                      docker:
+                        type: string
+                        example: UP
+
+  # ============================================================
+  # 5. AI 诊断接口 (2个)
+  # ============================================================
+  /diagnosis/{taskId}:
+    get:
+      tags: [Diagnosis]
+      summary: 获取任务诊断结果
+      operationId: getDiagnosis
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/DiagnosisResult'
+        '404':
+          description: 诊断结果不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    post:
+      tags: [Diagnosis]
+      summary: 请求 AI 诊断
+      operationId: requestDiagnosis
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                forceRefresh:
+                  type: boolean
+                  default: false
+                  description: 强制刷新，不使用缓存
+      responses:
+        '202':
+          description: 诊断请求已接受
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          diagnosisId:
+                            type: integer
+                            format: int64
+                          status:
+                            type: string
+                            enum: [PENDING, PROCESSING, COMPLETED]
+
+# ============================================================
+# 错误码定义
+# ============================================================
+# 业务错误码规范:
+# - 1xxx: 认证相关
+# - 2xxx: 任务相关
+# - 3xxx: 环境相关
+# - 4xxx: AI 诊断相关
+# - 5xxx: 系统相关
+#
+# 错误码列表:
+# - 1001: 用户名或密码错误
+# - 1002: Token 已过期
+# - 1003: Token 无效
+# - 2001: 任务不存在
+# - 2002: 任务状态不允许该操作
+# - 2003: 任务创建失败
+# - 3001: 环境不存在
+# - 3002: 无可用环境
+# - 3003: 环境创建失败
+# - 4001: AI 服务不可用
+# - 4002: 诊断超时
+# - 4003: 诊断结果不存在
+# - 5001: 系统内部错误
+# - 5002: Docker 服务不可用
+# - 5003: 资源不足
