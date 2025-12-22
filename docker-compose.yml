@@ -1,0 +1,101 @@
+# ============================================================================
+# Sentinel - Docker Compose 配置（开发环境）
+# ============================================================================
+# 用途：本地开发环境快速启动 MySQL 和 Redis 服务
+# 使用方法：docker-compose up -d
+
+version: '3.8'
+
+services:
+  # MySQL 8.0 数据库服务
+  mysql:
+    image: mysql:8.0
+    container_name: sentinel-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-sentinel}
+      MYSQL_USER: ${MYSQL_USER:-sentinel}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-sentinel}
+      TZ: Asia/Shanghai
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      # 数据持久化
+      - mysql-data:/var/lib/mysql
+      # MySQL 配置文件
+      - ./docker/mysql/my.cnf:/etc/mysql/conf.d/my.cnf:ro
+      # 初始化脚本
+      - ./docs/database/mysql-schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    networks:
+      - sentinel-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis 7.0 缓存服务
+  redis:
+    image: redis:7.0-alpine
+    container_name: sentinel-redis
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      # 数据持久化
+      - redis-data:/data
+      # Redis 配置文件
+      - ./docker/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf
+    networks:
+      - sentinel-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # Ollama AI 服务（可选，如果需要本地 AI 服务）
+  ollama:
+    image: ollama/ollama:latest
+    container_name: sentinel-ollama
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - sentinel-network
+    # 如果有 GPU，取消注释以下配置
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+# 数据卷定义
+volumes:
+  mysql-data:
+    driver: local
+    name: sentinel-mysql-data
+  redis-data:
+    driver: local
+    name: sentinel-redis-data
+  ollama-data:
+    driver: local
+    name: sentinel-ollama-data
+
+# 网络定义
+networks:
+  sentinel-network:
+    driver: bridge
+    name: sentinel-network

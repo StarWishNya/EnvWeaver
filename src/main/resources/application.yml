@@ -1,0 +1,177 @@
+# ============================================================================
+# Sentinel 智能测试环境管理系统 - 通用配置
+# ============================================================================
+
+spring:
+  application:
+    name: sentinel
+  
+  # 激活的配置文件（dev/test/prod）
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+
+# ============================================================================
+# 服务器配置
+# ============================================================================
+server:
+  port: ${SERVER_PORT:8080}
+  servlet:
+    context-path: /
+  # 请求超时时间（毫秒）
+  connection-timeout: 30000
+
+# ============================================================================
+# JWT 配置
+# ============================================================================
+jwt:
+  # JWT 密钥（生产环境必须使用环境变量）
+  secret: ${JWT_SECRET:your-secret-key-change-in-production}
+  # 访问令牌过期时间（毫秒，默认24小时）
+  expiration: ${JWT_EXPIRATION:86400000}
+  # 刷新令牌过期时间（毫秒，默认7天）
+  refresh-expiration: ${JWT_REFRESH_EXPIRATION:604800000}
+  # Token 发行者
+  issuer: sentinel
+  # Token 受众
+  audience: sentinel-users
+  # Token 请求头名称
+  header: Authorization
+  # Token 前缀
+  token-prefix: "Bearer "
+
+# ============================================================================
+# 安全配置
+# ============================================================================
+security:
+  # 登录尝试配置
+  login-attempt:
+    # 最大登录尝试次数
+    max-attempts: ${SECURITY_MAX_ATTEMPTS:5}
+    # 账户锁定时间（分钟）
+    lock-time-minutes: ${SECURITY_LOCK_TIME:15}
+  
+  # CORS 配置
+  cors:
+    allowed-origins:
+      - http://localhost:3000
+      - http://localhost:8080
+    allowed-methods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      - OPTIONS
+    allowed-headers:
+      - "*"
+    allow-credentials: true
+    max-age: 3600
+
+# ============================================================================
+# 缓存配置
+# ============================================================================
+cache:
+  # AI 诊断缓存 TTL（秒，默认24小时）
+  diagnosis-ttl: ${CACHE_DIAGNOSIS_TTL:86400}
+  # 系统指标缓存 TTL（秒，默认5分钟）
+  metrics-ttl: ${CACHE_METRICS_TTL:300}
+  # Token 黑名单缓存 TTL（秒，默认24小时）
+  token-blacklist-ttl: ${CACHE_TOKEN_BLACKLIST_TTL:86400}
+  # 缓存键前缀
+  key-prefix: ${CACHE_KEY_PREFIX:sentinel:}
+
+# ============================================================================
+# AI 服务配置
+# ============================================================================
+ai:
+  # AI 提供商类型（ollama/openai/custom）
+  provider: ${AI_PROVIDER:ollama}
+  
+  # Ollama 配置（本地 AI 服务）
+  ollama:
+    base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+    model: ${OLLAMA_MODEL:qwen2.5:7b}
+    timeout: ${OLLAMA_TIMEOUT:120}
+    stream: false
+    temperature: 0.7
+  
+  # OpenAI 配置（云端 AI 服务）
+  openai:
+    base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
+    api-key: ${OPENAI_API_KEY:}
+    model: ${OPENAI_MODEL:gpt-3.5-turbo}
+    timeout: ${OPENAI_TIMEOUT:60}
+    max-tokens: 2000
+    temperature: 0.7
+  
+  # 自定义 AI 配置（OpenAI 兼容 API）
+  custom:
+    base-url: ${CUSTOM_AI_BASE_URL:}
+    api-key: ${CUSTOM_AI_API_KEY:}
+    model: ${CUSTOM_AI_MODEL:}
+    timeout: ${CUSTOM_AI_TIMEOUT:60}
+    max-tokens: 2000
+    temperature: 0.7
+
+# ============================================================================
+# Docker 配置
+# ============================================================================
+docker:
+  # Docker 主机地址
+  host: ${DOCKER_HOST:unix:///var/run/docker.sock}
+  # Docker API 版本
+  api-version: ${DOCKER_API_VERSION:1.41}
+  # 是否启用 TLS 验证
+  tls-verify: ${DOCKER_TLS_VERIFY:false}
+  # TLS 证书路径
+  cert-path: ${DOCKER_CERT_PATH:}
+  # 连接超时时间（秒）
+  connection-timeout: ${DOCKER_CONNECTION_TIMEOUT:30}
+  # 响应超时时间（秒）
+  response-timeout: ${DOCKER_RESPONSE_TIMEOUT:60}
+  
+  # 容器配置
+  container:
+    default-network: sentinel-network
+    name-prefix: sentinel-
+    memory-limit: 512
+    cpu-limit: 1.0
+    auto-remove: false
+    restart-policy: unless-stopped
+
+# ============================================================================
+# Actuator 监控配置
+# ============================================================================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus,info
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+# ============================================================================
+# Swagger/OpenAPI 配置
+# ============================================================================
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+
+# ============================================================================
+# 日志配置
+# ============================================================================
+logging:
+  level:
+    root: INFO
+    com.sentinel: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"

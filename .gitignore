@@ -83,6 +83,22 @@ docker-compose.override.yml
 .env
 .env.local
 .env.*.local
+application-local.yml
+application-local.properties
+
+# Sensitive configuration files
+**/application-prod.yml.backup
+**/application-prod.properties.backup
+**/*-secret.yml
+**/*-secret.properties
+**/*.key
+**/*.pem
+**/*.p12
+**/*.jks
+
+# Logs
+logs/
+*.log
 
 # Node (if frontend exists)
 node_modules/
@@ -99,3 +115,6 @@ yarn-error.log*
 # Test output
 test-output/
 surefire-reports/
+
+# resources
+src/main/resources/

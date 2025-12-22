@@ -1,0 +1,151 @@
+# ============================================================================
+# Sentinel - 生产环境配置
+# ============================================================================
+# 注意：生产环境所有敏感配置必须使用环境变量，不得硬编码
+
+spring:
+  # 数据库配置（生产环境）
+  datasource:
+    url: jdbc:mysql://${DB_HOST}:${DB_PORT:3306}/${DB_NAME:sentinel}?useUnicode=true&characterEncoding=utf8&useSSL=true&serverTimezone=Asia/Shanghai&requireSSL=true
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:50}
+      minimum-idle: ${DB_POOL_MIN_IDLE:20}
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      connection-test-query: SELECT 1
+
+  # Redis 配置（生产环境）
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD}
+      database: ${REDIS_DATABASE:0}
+      timeout: 5000ms
+      ssl: ${REDIS_SSL:false}
+      lettuce:
+        pool:
+          max-active: 32
+          max-idle: 16
+          min-idle: 8
+          max-wait: 3000ms
+
+  # SQL 初始化（生产环境禁用）
+  sql:
+    init:
+      mode: never
+
+# MyBatis-Plus 配置
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.sentinel.domain
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+# JWT 配置（生产环境 - 必须使用环境变量）
+jwt:
+  secret: ${JWT_SECRET}
+  expiration: ${JWT_EXPIRATION:3600000}  # 默认1小时
+  refresh-expiration: ${JWT_REFRESH_EXPIRATION:86400000}  # 默认1天
+
+# 安全配置（生产环境 - 严格）
+security:
+  login-attempt:
+    max-attempts: ${SECURITY_MAX_ATTEMPTS:3}
+    lock-time-minutes: ${SECURITY_LOCK_TIME:30}
+  cors:
+    allowed-origins:
+      - ${CORS_ALLOWED_ORIGIN_1}
+      - ${CORS_ALLOWED_ORIGIN_2:}
+    allowed-methods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+    allow-credentials: true
+
+# 缓存配置（生产环境 - 较长 TTL）
+cache:
+  diagnosis-ttl: ${CACHE_DIAGNOSIS_TTL:259200}  # 默认3天
+  metrics-ttl: ${CACHE_METRICS_TTL:600}  # 默认10分钟
+  token-blacklist-ttl: ${CACHE_TOKEN_BLACKLIST_TTL:86400}  # 默认1天
+  key-prefix: ${CACHE_KEY_PREFIX:sentinel:prod:}
+
+# AI 配置（生产环境 - 推荐使用 OpenAI）
+ai:
+  provider: ${AI_PROVIDER:openai}
+  ollama:
+    base-url: ${OLLAMA_BASE_URL:http://ollama-service:11434}
+    model: ${OLLAMA_MODEL:qwen2.5:7b}
+    timeout: ${OLLAMA_TIMEOUT:120}
+  openai:
+    base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
+    api-key: ${OPENAI_API_KEY}
+    model: ${OPENAI_MODEL:gpt-4}
+    timeout: ${OPENAI_TIMEOUT:60}
+    max-tokens: ${OPENAI_MAX_TOKENS:2000}
+  custom:
+    base-url: ${CUSTOM_AI_BASE_URL}
+    api-key: ${CUSTOM_AI_API_KEY}
+    model: ${CUSTOM_AI_MODEL}
+    timeout: ${CUSTOM_AI_TIMEOUT:60}
+
+# Docker 配置（生产环境）
+docker:
+  host: ${DOCKER_HOST:unix:///var/run/docker.sock}
+  api-version: ${DOCKER_API_VERSION:1.41}
+  tls-verify: ${DOCKER_TLS_VERIFY:true}
+  cert-path: ${DOCKER_CERT_PATH:}
+  connection-timeout: ${DOCKER_CONNECTION_TIMEOUT:30}
+  response-timeout: ${DOCKER_RESPONSE_TIMEOUT:120}
+  container:
+    default-network: ${DOCKER_NETWORK:sentinel-prod-network}
+    name-prefix: ${DOCKER_NAME_PREFIX:sentinel-prod-}
+    memory-limit: ${DOCKER_MEMORY_LIMIT:2048}
+    cpu-limit: ${DOCKER_CPU_LIMIT:2.0}
+    restart-policy: ${DOCKER_RESTART_POLICY:always}
+
+# 服务器配置（生产环境）
+server:
+  port: ${SERVER_PORT:8080}
+  # 启用 HTTPS（推荐）
+  ssl:
+    enabled: ${SERVER_SSL_ENABLED:false}
+    key-store: ${SERVER_SSL_KEY_STORE:}
+    key-store-password: ${SERVER_SSL_KEY_STORE_PASSWORD:}
+    key-store-type: ${SERVER_SSL_KEY_STORE_TYPE:PKCS12}
+
+# 日志配置（生产环境 - WARN 级别）
+logging:
+  level:
+    root: WARN
+    com.sentinel: INFO
+    com.baomidou.mybatisplus: WARN
+    org.springframework: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n"
+  file:
+    name: ${LOG_FILE:/var/log/sentinel/sentinel-prod.log}
+    max-size: ${LOG_MAX_SIZE:500MB}
+    max-history: ${LOG_MAX_HISTORY:90}
+
+# Actuator 配置（生产环境 - 限制暴露）
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized

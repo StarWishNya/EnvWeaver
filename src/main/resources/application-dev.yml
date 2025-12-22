@@ -1,0 +1,115 @@
+# ============================================================================
+# Sentinel - 开发环境配置
+# ============================================================================
+
+spring:
+  # 数据库配置
+  datasource:
+    url: jdbc:mysql://localhost:3306/sentinel?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:root}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
+  # Redis 配置
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: 0
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 2
+          max-wait: -1ms
+
+  # SQL 初始化
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+      continue-on-error: false
+
+# MyBatis-Plus 配置
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.sentinel.domain
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+# JWT 配置（开发环境）
+jwt:
+  secret: sentinel-dev-secret-key-2024-change-in-production
+  expiration: 86400000  # 24小时
+  refresh-expiration: 604800000  # 7天
+
+# 安全配置（开发环境 - 较宽松）
+security:
+  login-attempt:
+    max-attempts: 10  # 开发环境允许更多尝试
+    lock-time-minutes: 5  # 开发环境锁定时间较短
+  cors:
+    allowed-origins:
+      - http://localhost:3000
+      - http://localhost:8080
+      - http://127.0.0.1:3000
+      - http://127.0.0.1:8080
+
+# 缓存配置（开发环境 - 较短 TTL）
+cache:
+  diagnosis-ttl: 3600  # 1小时
+  metrics-ttl: 60  # 1分钟
+  token-blacklist-ttl: 3600  # 1小时
+  key-prefix: "sentinel:dev:"
+
+# AI 配置（开发环境 - 使用本地 Ollama）
+ai:
+  provider: ollama
+  ollama:
+    base-url: http://localhost:11434
+    model: qwen2.5:7b
+    timeout: 120
+    stream: false
+    temperature: 0.7
+
+# Docker 配置（开发环境）
+docker:
+  host: unix:///var/run/docker.sock
+  api-version: "1.41"
+  tls-verify: false
+  connection-timeout: 30
+  response-timeout: 60
+  container:
+    default-network: sentinel-dev-network
+    name-prefix: sentinel-dev-
+    memory-limit: 512
+    cpu-limit: 1.0
+
+# 日志配置（开发环境 - DEBUG 级别）
+logging:
+  level:
+    root: INFO
+    com.sentinel: DEBUG
+    com.baomidou.mybatisplus: DEBUG
+    org.springframework.security: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n"
+  file:
+    name: logs/sentinel-dev.log
+    max-size: 100MB
+    max-history: 30
