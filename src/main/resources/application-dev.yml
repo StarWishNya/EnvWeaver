@@ -34,7 +34,7 @@ spring:
   # SQL 初始化
   sql:
     init:
-      mode: always
+      mode: never  # 改为 never，避免重复创建表
       schema-locations: classpath:schema.sql
       continue-on-error: false
 

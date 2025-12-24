@@ -2,8 +2,14 @@
 
 # Sentinel 项目快速测试脚本
 
+# 切换到项目根目录（脚本所在目录的上一级）
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_ROOT"
+
 echo "🧪 Sentinel 项目快速测试"
 echo "=========================="
+echo "项目根目录: $PROJECT_ROOT"
 echo ""
 
 # 颜色定义

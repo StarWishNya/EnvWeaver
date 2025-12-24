@@ -6,9 +6,16 @@
 
 set -e
 
+# 切换到项目根目录（脚本所在目录的上一级）
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_ROOT"
+
 echo "========================================="
 echo "  Sentinel 开发环境启动"
 echo "========================================="
+echo "项目根目录: $PROJECT_ROOT"
+echo ""
 
 # 颜色定义
 GREEN='\033[0;32m'
