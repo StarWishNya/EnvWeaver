@@ -111,7 +111,9 @@ public class TaskLifecycleOrchestrator {
     }
 
     /**
-     * 成功或取消立即释放；失败先诊断（内部会同步采集容器日志）再缩短过期时间。
+     * 成功或取消立即释放；失败先诊断（内部会同步采集容器日志），
+     * 再把仍是 BUSY 或 READY 的环境标为 RETAINED 并缩短过期时间。
+     * 若该更新未命中，只缩短仍为 ERROR 的环境的过期时间，不改状态。
      */
     @Async(LifecycleAsyncConfig.LIFECYCLE_EXECUTOR)
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
@@ -163,7 +165,7 @@ public class TaskLifecycleOrchestrator {
 
     /**
      * 比较并设置 PENDING→QUEUED 成功才供给。供给期间被取消时释放新环境。
-     * 供给失败但异常带了环境编号时，先绑定再标失败，不立刻释放。
+     * 供给失败但异常带了环境编号时，先绑定再标失败，不立刻释放。环境保持 ERROR。
      */
     void provisionTask(Long taskId) {
         if (!lifecycleProperties.isAutoProvision()) {
@@ -188,7 +190,7 @@ public class TaskLifecycleOrchestrator {
             log.info("开始供给环境: taskId={}", taskId);
             environment = environmentProvisioner.provision(task);
         } catch (ProvisioningFailedException ex) {
-            // 环境行已经落库。先绑定再标失败，FAILED 事件只缩短过期时间，不释放。
+            // 环境行已经落库。先绑定再标失败。FAILED 事件不把 ERROR 改成 RETAINED，只缩短过期时间。
             log.warn("环境供给失败: taskId={}, envId={}, reason={}",
                     taskId, ex.getEnvironmentId(), ex.getMessage());
             attachFailedEnvironment(taskId, ex.getEnvironmentId());
@@ -239,8 +241,8 @@ public class TaskLifecycleOrchestrator {
     }
 
     /**
-     * 失败先诊断，再把过期时间改成失败保留时长。不释放环境。
-     * 供给失败挂上的 ERROR 环境走同一条路，回收器到期后再清。
+     * 失败先诊断，再把仍是 BUSY 或 READY 的环境标为 RETAINED，过期时间改为失败保留时长。
+     * 供给失败留下的 ERROR 保持原状态，只缩短过期时间。RELEASING、IDLE 不改。不释放环境。
      */
     private void onFailed(Long taskId) {
         Task task;
@@ -268,11 +270,31 @@ public class TaskLifecycleOrchestrator {
         Duration retention = lifecycleProperties.getFailedRetention() == null
                 ? DEFAULT_FAILED_RETENTION : lifecycleProperties.getFailedRetention();
         LocalDateTime expiresAt = now().plus(retention);
+        // 只改 BUSY/READY。RELEASING、IDLE、ERROR（含供给失败）保持原状态。
         LambdaUpdateWrapper<Environment> wrapper = new LambdaUpdateWrapper<Environment>()
+                .set(Environment::getStatus, "RETAINED")
                 .set(Environment::getExpiresAt, expiresAt)
-                .eq(Environment::getId, task.getEnvironmentId());
-        environmentMapper.update(null, wrapper);
-        log.info("失败环境已保留待查: taskId={}, envId={}, expiresAt={}",
+                .eq(Environment::getId, task.getEnvironmentId())
+                .in(Environment::getStatus, "BUSY", "READY");
+        int updated = environmentMapper.update(null, wrapper);
+        if (updated > 0) {
+            log.info("失败环境已保留待查: taskId={}, envId={}, expiresAt={}",
+                    task.getId(), task.getEnvironmentId(), expiresAt);
+            return;
+        }
+        // 供给失败时环境已是 ERROR，保留原状态，只把过期时间缩短到失败保留时长。
+        // RELEASING、IDLE 不匹配，保持不动。
+        LambdaUpdateWrapper<Environment> errorExpiry = new LambdaUpdateWrapper<Environment>()
+                .set(Environment::getExpiresAt, expiresAt)
+                .eq(Environment::getId, task.getEnvironmentId())
+                .eq(Environment::getStatus, "ERROR");
+        int errorUpdated = environmentMapper.update(null, errorExpiry);
+        if (errorUpdated == 0) {
+            log.info("失败环境未改为保留（当前不是 BUSY、READY 或 ERROR）: taskId={}, envId={}",
+                    task.getId(), task.getEnvironmentId());
+            return;
+        }
+        log.info("供给失败环境已缩短过期时间，状态仍为 ERROR: taskId={}, envId={}, expiresAt={}",
                 task.getId(), task.getEnvironmentId(), expiresAt);
     }
 

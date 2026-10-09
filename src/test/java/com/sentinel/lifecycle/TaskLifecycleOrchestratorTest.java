@@ -1,5 +1,6 @@
 package com.sentinel.lifecycle;
 
+import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.sentinel.config.BusinessException;
@@ -220,8 +221,8 @@ class TaskLifecycleOrchestratorTest {
     }
 
     @Test
-    @DisplayName("供给失败后的 FAILED 事件只保留现场，不立刻释放")
-    void shouldRetainEnvironmentAfterProvisioningFailureInsteadOfReleasing() {
+    @DisplayName("供给失败后的 FAILED 事件不改 ERROR 状态，只缩短过期时间")
+    void shouldShortenExpiryOfErrorEnvironmentAfterProvisioningFailure() {
         Task queued = queuedTask(1L);
         Task failed = queuedTask(1L);
         failed.setStatus("FAILED");
@@ -231,7 +232,7 @@ class TaskLifecycleOrchestratorTest {
         when(environmentProvisioner.provision(queued))
                 .thenThrow(new ProvisioningFailedException(
                         ErrorCode.ENVIRONMENT_CREATE_FAILED, "容器未就绪", 9L));
-        when(environmentMapper.update(isNull(), any())).thenReturn(1);
+        when(environmentMapper.update(isNull(), any())).thenReturn(0, 1);
 
         orchestrator.onTaskCreated(new TaskCreatedEvent(1L));
         orchestrator.onTaskStatusChanged(new TaskStatusChangedEvent(1L, "QUEUED", "FAILED"));
@@ -241,9 +242,17 @@ class TaskLifecycleOrchestratorTest {
         order.verify(taskService).setTaskError(1L, "容器未就绪");
         order.verify(diagnosisService).requestDiagnosis(1L, null);
         ArgumentCaptor<Wrapper<Environment>> captor = ArgumentCaptor.forClass(Wrapper.class);
-        order.verify(environmentMapper).update(isNull(), captor.capture());
-        assertThat(MybatisLambdaCaches.values(captor.getValue()))
-                .contains(NOW.plus(properties.getFailedRetention()), 9L);
+        order.verify(environmentMapper, times(2)).update(isNull(), captor.capture());
+        List<Wrapper<Environment>> updates = captor.getAllValues();
+        assertThat(MybatisLambdaCaches.values(updates.get(0)))
+                .contains(NOW.plus(properties.getFailedRetention()), 9L, "RETAINED", "BUSY", "READY")
+                .doesNotContain("ERROR", "RELEASING", "IDLE");
+        assertThat(MybatisLambdaCaches.values(updates.get(1)))
+                .contains(NOW.plus(properties.getFailedRetention()), 9L, "ERROR")
+                .doesNotContain("RETAINED", "BUSY", "READY", "RELEASING", "IDLE");
+        assertThat(((AbstractWrapper<?, ?, ?>) updates.get(1)).getSqlSet())
+                .contains("expires_at")
+                .doesNotContain("status");
         verify(environmentService, never()).releaseEnvironment(any());
     }
 
@@ -312,7 +321,7 @@ class TaskLifecycleOrchestratorTest {
     }
 
     @Test
-    @DisplayName("失败时先诊断再设置保留时间，且不释放")
+    @DisplayName("失败时先诊断，再按 BUSY/READY 条件标为 RETAINED 并设置保留时间，不释放")
     void shouldRequestDiagnosisBeforeRetentionAndNotRelease() {
         Task task = queuedTask(5L);
         task.setStatus("FAILED");
@@ -326,9 +335,37 @@ class TaskLifecycleOrchestratorTest {
         order.verify(diagnosisService).requestDiagnosis(5L, null);
         ArgumentCaptor<Wrapper<Environment>> captor = ArgumentCaptor.forClass(Wrapper.class);
         order.verify(environmentMapper).update(isNull(), captor.capture());
+        assertThat(captor.getValue()).isInstanceOf(LambdaUpdateWrapper.class);
+        assertThat(((AbstractWrapper<?, ?, ?>) captor.getValue()).getSqlSegment()).contains("IN");
         assertThat(MybatisLambdaCaches.values(captor.getValue()))
-                .contains(NOW.plus(properties.getFailedRetention()), 12L);
-        assertThat(MybatisLambdaCaches.values(captor.getValue())).doesNotContain("BUSY");
+                .contains("RETAINED", "BUSY", "READY", NOW.plus(properties.getFailedRetention()), 12L)
+                .doesNotContain("RELEASING", "IDLE", "ERROR");
+        verify(environmentService, never()).releaseEnvironment(any());
+    }
+
+    @Test
+    @DisplayName("RELEASING 时两条条件更新都不命中，不改状态也不改过期时间")
+    void shouldNotUpdateReleasingEnvironmentWhenRetentionMisses() {
+        Task task = queuedTask(6L);
+        task.setStatus("FAILED");
+        task.setEnvironmentId(3L);
+        when(taskService.getTaskById(6L)).thenReturn(task);
+        when(environmentMapper.update(isNull(), any())).thenReturn(0, 0);
+
+        orchestrator.onTaskStatusChanged(new TaskStatusChangedEvent(6L, "RUNNING", "FAILED"));
+
+        ArgumentCaptor<Wrapper<Environment>> captor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(environmentMapper, times(2)).update(isNull(), captor.capture());
+        List<Wrapper<Environment>> updates = captor.getAllValues();
+        assertThat(MybatisLambdaCaches.values(updates.get(0)))
+                .contains("RETAINED", "BUSY", "READY", 3L, NOW.plus(properties.getFailedRetention()))
+                .doesNotContain("ERROR", "RELEASING", "IDLE");
+        assertThat(MybatisLambdaCaches.values(updates.get(1)))
+                .contains("ERROR", 3L, NOW.plus(properties.getFailedRetention()))
+                .doesNotContain("RETAINED", "BUSY", "READY", "RELEASING", "IDLE");
+        assertThat(((AbstractWrapper<?, ?, ?>) updates.get(1)).getSqlSet())
+                .contains("expires_at")
+                .doesNotContain("status");
         verify(environmentService, never()).releaseEnvironment(any());
     }
 
@@ -360,6 +397,7 @@ class TaskLifecycleOrchestratorTest {
         failed.setStatus("FAILED");
         failed.setEnvironmentId(3L);
         when(taskService.getTaskById(6L)).thenReturn(failed);
+        when(environmentMapper.update(isNull(), any())).thenReturn(1);
 
         orchestrator.onTaskCreated(new TaskCreatedEvent(6L));
         orchestrator.sweepPending();

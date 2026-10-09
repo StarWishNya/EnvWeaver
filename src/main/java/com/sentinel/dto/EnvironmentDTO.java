@@ -18,7 +18,8 @@ public class EnvironmentDTO {
     private String envCode;
 
     /**
-     * CREATING、READY、BUSY、RELEASING、IDLE、ERROR。
+     * CREATING、READY、BUSY、RELEASING、IDLE、ERROR、RETAINED。
+     * RETAINED 表示任务失败后环境保留到 expiresAt，供排查。
      */
     private String status;
 

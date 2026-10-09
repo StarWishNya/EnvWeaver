@@ -88,6 +88,24 @@ class EnvironmentReaperTest {
     }
 
     @Test
+    @DisplayName("过期的 RETAINED 环境会被释放")
+    void shouldReleaseExpiredRetainedEnvironment() {
+        Environment retained = environment(6L, "RETAINED", NOW.minusSeconds(1));
+        when(environmentMapper.selectList(any()))
+                .thenReturn(List.of(retained))
+                .thenReturn(List.of());
+
+        reaper.reap();
+
+        verify(environmentService).releaseEnvironment(6L);
+        ArgumentCaptor<Wrapper<Environment>> captor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(environmentMapper, times(2)).selectList(captor.capture());
+        assertThat(MybatisLambdaCaches.values(captor.getAllValues().get(0)))
+                .contains("IDLE", "RELEASING")
+                .doesNotContain("RETAINED");
+    }
+
+    @Test
     @DisplayName("单个环境释放失败后继续处理其余环境")
     void shouldContinueAfterReleaseFailure() {
         Environment first = environment(1L, "BUSY", NOW.minusMinutes(2));

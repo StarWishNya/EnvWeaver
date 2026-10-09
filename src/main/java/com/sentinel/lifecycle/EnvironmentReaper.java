@@ -70,7 +70,7 @@ public class EnvironmentReaper {
     }
 
     /**
-     * 释放 expiresAt 已过且不是 IDLE/RELEASING 的环境（含 ERROR，便于失败后重试）。
+     * 释放 expiresAt 已过且不是 IDLE/RELEASING 的环境（含 ERROR 与 RETAINED）。
      * CREATING 超过两倍就绪超时的，先把 expiresAt 拨到过去再释放。
      */
     @Scheduled(

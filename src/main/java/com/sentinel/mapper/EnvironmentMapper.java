@@ -65,4 +65,31 @@ public interface EnvironmentMapper extends BaseMapper<Environment> {
      */
     @Update("UPDATE t_environment SET status = 'ERROR', port_mappings = NULL WHERE id = #{id}")
     int markProvisionFailed(@Param("id") Long id);
+
+    /**
+     * 按状态查询环境，按 id 升序，最多 limit 条。
+     * 采集器用来扫描 READY、BUSY、RETAINED。
+     */
+    @Select("<script>" +
+            "SELECT * FROM t_environment WHERE status IN " +
+            "<foreach collection='statuses' item='status' open='(' separator=',' close=')'>" +
+            "#{status}" +
+            "</foreach> " +
+            "ORDER BY id ASC LIMIT #{limit}" +
+            "</script>")
+    List<Environment> selectByStatuses(@Param("statuses") List<String> statuses, @Param("limit") int limit);
+
+    /**
+     * 仍写着资源使用的空闲环境，释放后用来清掉过期的 CPU / 内存。
+     */
+    @Select("SELECT * FROM t_environment WHERE status = 'IDLE' AND resource_usage IS NOT NULL " +
+            "ORDER BY id ASC LIMIT #{limit}")
+    List<Environment> selectIdleWithResourceUsage(@Param("limit") int limit);
+
+    /**
+     * 只更新 resource_usage，不改 status。
+     * resourceUsage 为 null 时写成 SQL NULL。updated_at 可以随行更新而变化。
+     */
+    @Update("UPDATE t_environment SET resource_usage = #{resourceUsage, jdbcType=VARCHAR} WHERE id = #{id}")
+    int updateResourceUsage(@Param("id") Long id, @Param("resourceUsage") String resourceUsage);
 }

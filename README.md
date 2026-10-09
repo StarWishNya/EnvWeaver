@@ -111,6 +111,7 @@ docker-compose down -v
 
 ### 访问应用
 
+- Web 界面: http://localhost:8080/ （用 `admin` / `admin123` 登录，可管理任务、查看环境与日志、请求 AI 诊断、看监控）
 - 应用地址: http://localhost:8080
 - Swagger UI: http://localhost:8080/swagger-ui.html
 - Actuator: http://localhost:8080/actuator
@@ -247,9 +248,9 @@ BASE_URL=http://localhost:8080 bash scripts/ai-smoke-test.sh
 | `GET /api/tasks?page=0&size=20&status=&testType=` | 分页列表，`page` 从 0 开始，`size` 取 1 到 500，数据在 `data.content` |
 | `DELETE /api/tasks/{taskId}` | 取消任务（旧的 `POST /api/tasks/{taskId}/cancel` 仍可用，已弃用） |
 | `GET /api/tasks/{taskId}/logs?tail=100&since=` | 任务环境内各容器的尾部日志，`tail` 取 1 到 5000；`since` 为 ISO-8601 时间，交给 Docker 过滤 |
-| `GET /api/environments?status=` | 环境列表，按 id 倒序，最多 500 条 |
-| `GET /api/environments/{envId}` | 环境详情，`portMappings` 与 `resourceUsage` 以对象返回 |
-| `POST /api/environments/{envId}/release` | 停止并删除环境内容器，环境变为 `IDLE`。已是 `IDLE` 或 `RELEASING` 时返回 400；有容器删除失败时环境变为 `ERROR` 并返回 503，可重试 |
+| `GET /api/environments?status=` | 环境列表，按 id 倒序，最多 500 条。状态为 `CREATING`、`READY`、`BUSY`、`RELEASING`、`IDLE`、`ERROR`、`RETAINED`（任务失败后保留排查） |
+| `GET /api/environments/{envId}` | 环境详情，`portMappings` 与 `resourceUsage` 以对象返回。`resourceUsage` 为 `{cpu, memory, sampledAt}`：CPU 单位为核，内存单位为 MB |
+| `POST /api/environments/{envId}/release` | 停止并删除环境内容器，环境变为 `IDLE`。`RETAINED` 也可以释放。已是 `IDLE` 或 `RELEASING` 时返回 400；有容器删除失败时环境变为 `ERROR` 并返回 503，可重试 |
 | `GET /api/metrics` | 主机 CPU、内存、磁盘与 Docker 容器数 |
 | `GET /api/metrics/health` | 匿名可访问，`{status, components:{db, redis, docker}}`；任一项 `DOWN` 时返回 503 |
 
@@ -260,10 +261,12 @@ BASE_URL=http://localhost:8080 bash scripts/ai-smoke-test.sh
 1. 按 `dependencies` 启动容器。内置 `mysql`、`redis`、`postgres`、`mongodb`、`rabbitmq`、`nginx`，可在 `sentinel.provisioning.dependencies` 中覆盖或新增。主机端口从 `sentinel.provisioning.port-range`（默认 30000-39999）分配，结果在环境的 `portMappings` 中。
 2. 容器端口可连接后，环境变为 `BUSY`，任务变为 `RUNNING`。依赖名未知或容器启动失败时，任务变为 `FAILED`，`errorMessage` 写明原因。
 3. 外部 CI 用 `PUT /api/tasks/{taskId}/status?status=SUCCESS|FAILED` 回报结果，或用 `DELETE` 取消。
-4. `SUCCESS` 和取消会立即释放环境。`FAILED` 会先自动请求 AI 诊断（此时容器日志还在），再把环境保留 `sentinel.lifecycle.failed-retention`（默认 30 分钟）供排查。
+4. `SUCCESS` 和取消会立即释放环境。`FAILED` 会先自动请求 AI 诊断（此时容器日志还在），再把环境标为 `RETAINED`，保留 `sentinel.lifecycle.failed-retention`（默认 30 分钟）供排查。环境创建本身失败时，环境保持 `ERROR`，同样在保留期后回收。
 5. 后台每分钟回收已过期的环境（默认存活 `sentinel.provisioning.ttl` 2 小时），并补扫因重启遗漏的 `PENDING` 任务。
 
 `sentinel.lifecycle.auto-provision` 和 `auto-diagnose` 可分别关闭自动供给和失败自动诊断。测试 profile 中两者都关闭。
+
+`READY`、`BUSY`、`RETAINED` 的环境每 `sentinel.monitoring.resource-usage.interval`（默认 30 秒）通过 `docker stats` 采集一次，各容器汇总后写入 `resourceUsage`。环境变为 `IDLE` 后清空。设置 `sentinel.monitoring.resource-usage.enabled=false` 可关闭采集。
 
 ## 配置说明
 

@@ -43,6 +43,7 @@ public class DockerEnvironmentProvisioner implements EnvironmentProvisioner {
     private static final String STATUS_READY = "READY";
     private static final String STATUS_IDLE = "IDLE";
     private static final String STATUS_ERROR = "ERROR";
+    private static final String STATUS_RETAINED = "RETAINED";
     private static final String CONTAINER_RUNNING = "RUNNING";
     private static final String HEALTH_UNKNOWN = "UNKNOWN";
     private static final String HEALTH_HEALTHY = "HEALTHY";
@@ -140,11 +141,15 @@ public class DockerEnvironmentProvisioner implements EnvironmentProvisioner {
             log.info("任务关联的环境不存在，将重新创建: taskId={}, environmentId={}", task.getId(), environmentId);
             return null;
         }
+        // IDLE、ERROR、RETAINED 不能复用。保留中的容器仍占端口，但现场属于失败任务。
         String status = environment.getStatus() == null ? "" : environment.getStatus().trim();
-        if (!STATUS_IDLE.equalsIgnoreCase(status) && !STATUS_ERROR.equalsIgnoreCase(status) && !status.isEmpty()) {
-            return environment;
+        if (STATUS_IDLE.equalsIgnoreCase(status)
+                || STATUS_ERROR.equalsIgnoreCase(status)
+                || STATUS_RETAINED.equalsIgnoreCase(status)
+                || status.isEmpty()) {
+            return null;
         }
-        return null;
+        return environment;
     }
 
     private Environment createEmptyEnvironment(Task task) {

@@ -97,6 +97,19 @@ public class EnvironmentServiceTest {
     }
 
     @Test
+    @DisplayName("RETAINED 是合法过滤状态")
+    public void shouldAcceptRetainedStatusFilter() {
+        Environment retained = environment("RETAINED");
+        when(environmentMapper.selectRecent("RETAINED", 500)).thenReturn(List.of(retained));
+
+        List<EnvironmentDTO> result = environmentService.listEnvironments("RETAINED");
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getStatus()).isEqualTo("RETAINED");
+        verify(environmentMapper).selectRecent("RETAINED", 500);
+    }
+
+    @Test
     @DisplayName("非法状态返回 400 且不查库")
     public void shouldRejectUnknownStatus() {
         assertThatThrownBy(() -> environmentService.listEnvironments("running"))
@@ -118,14 +131,17 @@ public class EnvironmentServiceTest {
         EnvironmentDTO dto = environmentService.getEnvironment(1L);
 
         assertThat(dto.getPortMappings()).containsEntry("mysql", 33061);
-        assertThat(dto.getResourceUsage()).containsEntry("cpu", 1).containsEntry("memory", 512).containsEntry("disk", null);
+        assertThat(dto.getResourceUsage())
+                .containsEntry("cpu", 1)
+                .containsEntry("memory", 512)
+                .doesNotContainKey("disk");
         assertThat(dto.getComposeContent()).isEqualTo("services: {}\n");
         assertThat(dto.getAccessUrl()).isEqualTo("http://127.0.0.1:18080");
         assertThat(dto.getExpiresAt()).isEqualTo(LocalDateTime.of(2026, 10, 9, 12, 0));
     }
 
     @Test
-    @DisplayName("非法 JSON、非对象和非数字值变为 null 且不抛错")
+    @DisplayName("非法 JSON 与非对象变为 null，非数字 cpu 只置空该字段")
     public void shouldIgnoreMalformedJson() {
         Environment environment = environment("READY");
         environment.setPortMappings("[1,2]");
@@ -136,7 +152,7 @@ public class EnvironmentServiceTest {
 
         assertThat(dto.getStatus()).isEqualTo("READY");
         assertThat(dto.getPortMappings()).isNull();
-        assertThat(dto.getResourceUsage()).isNull();
+        assertThat(dto.getResourceUsage()).containsEntry("cpu", null).hasSize(1);
 
         environment.setPortMappings("null");
         environment.setResourceUsage("   ");
@@ -149,6 +165,33 @@ public class EnvironmentServiceTest {
         dto = environmentService.getEnvironment(1L);
         assertThat(dto.getPortMappings()).isNull();
         assertThat(dto.getResourceUsage()).containsEntry("cpu", 0.5d);
+    }
+
+    @Test
+    @DisplayName("资源用量保留 sampledAt，非法 cpu 只置空 cpu")
+    public void shouldKeepSampledAtAndNullOnlyBadCpu() {
+        Environment environment = environment("READY");
+        environment.setResourceUsage(
+                "{\"cpu\":0.25,\"memory\":128,\"sampledAt\":\"2026-10-09T01:00:00\"}");
+        when(environmentMapper.selectById(1L)).thenReturn(environment);
+
+        EnvironmentDTO dto = environmentService.getEnvironment(1L);
+
+        assertThat(dto.getResourceUsage())
+                .containsEntry("cpu", 0.25d)
+                .containsEntry("memory", 128)
+                .containsEntry("sampledAt", "2026-10-09T01:00:00");
+
+        environment.setResourceUsage(
+                "{\"cpu\":\"high\",\"memory\":128,\"sampledAt\":\"2026-10-09T01:00:00\",\"note\":\"skip\"}");
+        dto = environmentService.getEnvironment(1L);
+
+        assertThat(dto.getResourceUsage())
+                .containsEntry("cpu", null)
+                .containsEntry("memory", 128)
+                .containsEntry("sampledAt", "2026-10-09T01:00:00")
+                .doesNotContainKey("note");
+        assertThat(dto.getPortMappings()).containsEntry("mysql", 33061);
     }
 
     @Test
@@ -255,6 +298,23 @@ public class EnvironmentServiceTest {
         verify(containerMapper, never()).updateById(any(Container.class));
         assertThat(mysql.getStatus()).isEqualTo("RUNNING");
         assertThat(statusUpdates).containsExactly("RELEASING", "ERROR");
+    }
+
+    @Test
+    @DisplayName("RETAINED 可释放，成功后变为 IDLE")
+    public void shouldReleaseRetainedEnvironment() {
+        Environment environment = environment("RETAINED");
+        when(environmentMapper.selectById(1L)).thenReturn(environment);
+        Container mysql = container(11L, "cid-mysql");
+        when(containerMapper.findByEnvironmentId(1L)).thenReturn(List.of(mysql));
+
+        environmentService.releaseEnvironment(1L);
+
+        verify(dockerService).assertDockerAvailable();
+        verify(dockerService).stopAndRemoveContainer("cid-mysql");
+        assertThat(mysql.getStatus()).isEqualTo("STOPPED");
+        assertThat(mysql.getStoppedAt()).isNotNull();
+        assertThat(statusUpdates).containsExactly("RELEASING", "IDLE");
     }
 
     @Test

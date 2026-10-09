@@ -94,6 +94,12 @@ if [[ -z "$TASK_ID" || "$TASK_ID" == "null" ]]; then
   fail "create task did not return data.id"
 fi
 pass "created task ${TASK_CODE} id=${TASK_ID}"
+# 创建任务会自动供给环境。退出时取消任务，环境随之释放，避免残留 RUNNING 任务与占用的环境
+cleanup_task() {
+  curl -sS -o /dev/null -X DELETE "${BASE_URL}/api/tasks/${TASK_ID}" \
+    -H "Authorization: Bearer ${ACCESS_TOKEN}" || true
+}
+trap cleanup_task EXIT
 
 request POST "${BASE_URL}/api/diagnosis/${TASK_ID}" \
   -H "Authorization: Bearer ${ACCESS_TOKEN}" \

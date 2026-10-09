@@ -150,3 +150,12 @@ sentinel:
       nginx:
         image: nginx:alpine
         port: 80
+
+  # 测试不采样，避免访问 Docker。间隔拉长，启动后不会立刻调度。
+  monitoring:
+    resource-usage:
+      enabled: false
+      interval: 24h
+      read-timeout: 5s
+      max-environments-per-pass: 200
+      parallelism: 4

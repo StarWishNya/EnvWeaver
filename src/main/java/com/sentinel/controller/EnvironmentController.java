@@ -37,7 +37,7 @@ public class EnvironmentController {
     @GetMapping
     @Operation(summary = "获取环境列表", description = "查询环境列表，可按状态过滤")
     public ApiResponse<List<EnvironmentDTO>> listEnvironments(
-            @Parameter(description = "环境状态：CREATING、READY、BUSY、RELEASING、IDLE、ERROR")
+            @Parameter(description = "环境状态：CREATING、READY、BUSY、RELEASING、IDLE、ERROR、RETAINED")
             @RequestParam(required = false) String status) {
         return ApiResponse.success(environmentService.listEnvironments(status));
     }

@@ -41,7 +41,7 @@ public class EnvironmentService {
     private static final String CONTAINER_STOPPED = "STOPPED";
 
     private static final Set<String> ENVIRONMENT_STATUSES = Set.of(
-            "CREATING", "READY", "BUSY", "RELEASING", "IDLE", "ERROR");
+            "CREATING", "READY", "BUSY", "RELEASING", "IDLE", "ERROR", "RETAINED");
 
     private final EnvironmentMapper environmentMapper;
     private final ContainerMapper containerMapper;
@@ -87,7 +87,7 @@ public class EnvironmentService {
      * 释放环境：先标记 RELEASING，停掉并删除容器。
      * 成功的容器记录改为 STOPPED；停止或删除失败（容器已不存在除外）的记录改为 ERROR，不记为 STOPPED。
      * 任一容器失败时环境改为 ERROR，并抛出 DOCKER_ERROR（HTTP 503），消息只包含失败数量。
-     * ERROR 可再次释放。已是 IDLE 或 RELEASING 时拒绝，HTTP 400（OPERATION_NOT_ALLOWED）。
+     * ERROR、RETAINED 可再次释放。已是 IDLE 或 RELEASING 时拒绝，HTTP 400（OPERATION_NOT_ALLOWED）。
      * Docker 守护进程整体不可用时把环境标为 ERROR 并抛出原 DOCKER_ERROR。
      * 不加外层事务：失败状态需要提交，不能随异常回滚。
      */
@@ -219,6 +219,10 @@ public class EnvironmentService {
         return mappings;
     }
 
+    /**
+     * cpu、memory 保持为数字。非数字或非有限数字只把该字段置空并记警告，不丢弃整个对象。
+     * sampledAt 是字符串时原样保留。其他未知的非数字字段忽略；未知数字字段仍保留。
+     */
     private Map<String, Object> parseResourceUsage(Long envId, String json) {
         JsonNode node = readObjectNode(envId, "resourceUsage", json);
         if (node == null) {
@@ -228,32 +232,68 @@ public class EnvironmentService {
         Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
         while (fields.hasNext()) {
             Map.Entry<String, JsonNode> entry = fields.next();
+            String key = entry.getKey();
             JsonNode value = entry.getValue();
-            if (value != null && value.isNull()) {
-                usage.put(entry.getKey(), null);
+            if ("cpu".equals(key) || "memory".equals(key)) {
+                usage.put(key, usageNumber(envId, key, value));
                 continue;
             }
-            if (value == null || !value.isNumber()) {
-                log.warn("环境资源使用值不是数字，已忽略: envId={}, key={}", envId, entry.getKey());
-                return null;
-            }
-            if (value.isIntegralNumber()) {
-                // 分开赋值，避免三元表达式把 int 提升成 long。
-                if (value.canConvertToInt()) {
-                    usage.put(entry.getKey(), value.intValue());
-                } else {
-                    usage.put(entry.getKey(), value.longValue());
+            if ("sampledAt".equals(key)) {
+                if (value != null && value.isTextual()) {
+                    usage.put(key, value.asText());
                 }
-            } else {
-                double number = value.doubleValue();
-                if (!Double.isFinite(number)) {
-                    log.warn("环境资源使用值不是有限数字，已忽略: envId={}, key={}", envId, entry.getKey());
-                    return null;
-                }
-                usage.put(entry.getKey(), number);
+                continue;
             }
+            if (value == null || value.isNull() || !value.isNumber()) {
+                continue;
+            }
+            Object number = finiteNumber(value);
+            if (number == null) {
+                log.warn("环境资源使用值不是有限数字，已忽略: envId={}, key={}", envId, key);
+                continue;
+            }
+            usage.put(key, number);
         }
         return usage;
+    }
+
+    /**
+     * JSON null 得到 null 且不警告。非数字、非有限数字得到 null 并记警告。
+     */
+    private Object usageNumber(Long envId, String key, JsonNode value) {
+        if (value == null || value.isNull()) {
+            return null;
+        }
+        if (!value.isNumber()) {
+            log.warn("环境资源使用值不是数字，该字段置空: envId={}, key={}", envId, key);
+            return null;
+        }
+        Object number = finiteNumber(value);
+        if (number == null) {
+            log.warn("环境资源使用值不是有限数字，该字段置空: envId={}, key={}", envId, key);
+            return null;
+        }
+        return number;
+    }
+
+    /**
+     * 整数能放进 int 就用 int，避免提升成 long。非有限小数返回 null。
+     */
+    private Object finiteNumber(JsonNode value) {
+        if (value == null || !value.isNumber()) {
+            return null;
+        }
+        if (value.isIntegralNumber()) {
+            if (value.canConvertToInt()) {
+                return value.intValue();
+            }
+            return value.longValue();
+        }
+        double number = value.doubleValue();
+        if (!Double.isFinite(number)) {
+            return null;
+        }
+        return number;
     }
 
     /**

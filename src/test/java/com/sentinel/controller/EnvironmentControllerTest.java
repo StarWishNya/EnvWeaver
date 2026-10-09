@@ -94,6 +94,22 @@ class EnvironmentControllerTest {
 
     @Test
     @WithMockUser
+    @DisplayName("按 RETAINED 过滤返回 200")
+    void shouldFilterRetainedEnvironments() throws Exception {
+        EnvironmentDTO retained = sampleEnvironment();
+        retained.setStatus("RETAINED");
+        when(environmentService.listEnvironments("RETAINED")).thenReturn(List.of(retained));
+
+        mockMvc.perform(get("/api/environments").param("status", "RETAINED"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data[0].status").value("RETAINED"));
+
+        verify(environmentService).listEnvironments("RETAINED");
+    }
+
+    @Test
+    @WithMockUser
     @DisplayName("非法状态返回 400")
     void shouldReturnBadRequestWhenStatusInvalid() throws Exception {
         when(environmentService.listEnvironments("running"))

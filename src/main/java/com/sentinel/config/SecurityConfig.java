@@ -6,6 +6,7 @@ import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
 import org.springframework.security.config.Customizer;
@@ -19,6 +20,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -73,6 +75,13 @@ public class SecurityConfig {
                     "/swagger-ui/**",
                     "/api-docs/**",
                     "/v3/api-docs/**"
+                ).permitAll()
+                // 内置控制台只放行 GET。Ant 匹配器才能命中 classpath 静态资源；POST 和其他路径仍要认证。
+                .requestMatchers(
+                    AntPathRequestMatcher.antMatcher(HttpMethod.GET, "/"),
+                    AntPathRequestMatcher.antMatcher(HttpMethod.GET, "/index.html"),
+                    AntPathRequestMatcher.antMatcher(HttpMethod.GET, "/assets/**"),
+                    AntPathRequestMatcher.antMatcher(HttpMethod.GET, "/favicon.ico")
                 ).permitAll()
                 // 管理员接口；除 health 外的 actuator 端点（含 prometheus 指标）只对管理员开放
                 .requestMatchers("/api/admin/**", "/actuator/**").hasRole("ADMIN")

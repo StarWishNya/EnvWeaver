@@ -242,3 +242,12 @@ sentinel:
       nginx:
         image: nginx:alpine
         port: 80
+
+  # 运行中容器的 CPU、内存采样
+  monitoring:
+    resource-usage:
+      enabled: true
+      interval: 30s
+      read-timeout: 5s
+      max-environments-per-pass: 200
+      parallelism: 4

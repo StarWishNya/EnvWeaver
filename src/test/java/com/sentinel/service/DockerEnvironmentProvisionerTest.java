@@ -312,14 +312,14 @@ class DockerEnvironmentProvisionerTest {
     }
 
     @Test
-    @DisplayName("空闲或失败的旧环境不会被复用")
+    @DisplayName("空闲、失败或保留中的旧环境不会被复用")
     void idleOrErrorEnvironmentIsNotReused() {
         when(environmentMapper.insert(any(Environment.class))).thenAnswer(invocation -> {
             Environment environment = invocation.getArgument(0);
             environment.setId(50L);
             return 1;
         });
-        for (String status : List.of("IDLE", "ERROR")) {
+        for (String status : List.of("IDLE", "ERROR", "RETAINED")) {
             Task task = task(3L, "[]");
             task.setEnvironmentId(9L);
             Environment previous = new Environment();
