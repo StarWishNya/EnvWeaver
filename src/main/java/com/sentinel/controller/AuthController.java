@@ -3,6 +3,7 @@ package com.sentinel.controller;
 import com.sentinel.dto.ApiResponse;
 import com.sentinel.dto.LoginRequest;
 import com.sentinel.dto.LoginResponse;
+import com.sentinel.dto.UserInfo;
 import com.sentinel.service.AuthService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -47,6 +48,16 @@ public class AuthController {
         String token = extractRawToken(authorization);
         authService.logout(token);
         return ApiResponse.success("登出成功", null);
+    }
+
+    /**
+     * 当前登录用户。未认证由安全链返回 401；这里只返回公开字段。
+     */
+    @GetMapping("/me")
+    @Operation(summary = "获取当前用户信息", description = "返回已认证用户的 id、用户名、邮箱和角色，不包含密码")
+    public ApiResponse<UserInfo> me() {
+        log.info("获取当前用户信息");
+        return ApiResponse.success(authService.getCurrentUser());
     }
 
     /**

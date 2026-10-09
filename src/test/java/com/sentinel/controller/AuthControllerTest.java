@@ -1,11 +1,12 @@
 package com.sentinel.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sentinel.dto.ApiResponse;
 import com.sentinel.dto.LoginRequest;
 import com.sentinel.dto.LoginResponse;
+import com.sentinel.dto.UserInfo;
 import com.sentinel.config.BusinessException;
 import com.sentinel.config.GlobalExceptionHandler;
+import com.sentinel.enums.ErrorCode;
 import com.sentinel.service.AuthService;
 import com.sentinel.util.JwtUtil;
 import com.sentinel.config.JwtAuthenticationFilter;
@@ -26,6 +27,8 @@ import static org.mockito.Mockito.*;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /**
@@ -273,5 +276,41 @@ public class AuthControllerTest {
                 .andExpect(status().isMethodNotAllowed())
                 .andExpect(jsonPath("$.code").value(5007))
                 .andExpect(jsonPath("$.message").value("不支持的请求方法"));
+    }
+
+    @Test
+    @WithMockUser(username = "alice", roles = "USER")
+    @DisplayName("当前用户返回公开字段且不含密码")
+    public void shouldReturnCurrentUserWithoutPassword() throws Exception {
+        UserInfo info = new UserInfo();
+        info.setId(5L);
+        info.setUsername("alice");
+        info.setEmail("alice@example.com");
+        info.setRole("USER");
+        when(authService.getCurrentUser()).thenReturn(info);
+
+        mockMvc.perform(get("/api/auth/me"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.message").value("success"))
+                .andExpect(jsonPath("$.data.id").value(5))
+                .andExpect(jsonPath("$.data.username").value("alice"))
+                .andExpect(jsonPath("$.data.email").value("alice@example.com"))
+                .andExpect(jsonPath("$.data.role").value("USER"))
+                .andExpect(jsonPath("$.data.password").doesNotExist())
+                .andExpect(content().string(not(containsString("password"))));
+
+        verify(authService, times(1)).getCurrentUser();
+    }
+
+    @Test
+    @DisplayName("未认证访问当前用户返回 401")
+    public void shouldRejectAnonymousCurrentUser() throws Exception {
+        when(authService.getCurrentUser()).thenThrow(new BusinessException(ErrorCode.UNAUTHORIZED));
+
+        mockMvc.perform(get("/api/auth/me"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(1001))
+                .andExpect(jsonPath("$.message").value("未授权，请先登录"));
     }
 }

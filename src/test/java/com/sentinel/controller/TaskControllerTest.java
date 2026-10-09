@@ -5,6 +5,10 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sentinel.domain.Task;
 import com.sentinel.dto.CreateTaskRequest;
+import com.sentinel.dto.TaskLogsResponse;
+import com.sentinel.dto.TaskStatusResponse;
+import com.sentinel.enums.ErrorCode;
+import com.sentinel.service.ContainerLogWindow;
 import com.sentinel.config.BusinessException;
 import com.sentinel.config.GlobalExceptionHandler;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -461,5 +465,145 @@ public class TaskControllerTest {
                 .andExpect(jsonPath("$.data.priority").value("优先级必须在1到10之间"));
 
         verify(taskService, never()).createTask(any());
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("获取任务状态返回 taskId、status 和 progress")
+    public void shouldReturnTaskStatus() throws Exception {
+        TaskStatusResponse status = new TaskStatusResponse();
+        status.setTaskId(8L);
+        status.setStatus("RUNNING");
+        status.setProgress(50);
+        when(taskService.getTaskStatus(8L)).thenReturn(status);
+
+        mockMvc.perform(get("/api/tasks/{taskId}/status", 8L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.taskId").value(8))
+                .andExpect(jsonPath("$.data.status").value("RUNNING"))
+                .andExpect(jsonPath("$.data.progress").value(50));
+
+        verify(taskService).getTaskStatus(8L);
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("任务状态不存在时返回 404")
+    public void shouldReturnNotFoundWhenTaskStatusMissing() throws Exception {
+        when(taskService.getTaskStatus(9L)).thenThrow(new BusinessException(ErrorCode.TASK_NOT_FOUND));
+
+        mockMvc.perform(get("/api/tasks/{taskId}/status", 9L))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value(2001))
+                .andExpect(jsonPath("$.message").value("任务不存在"));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    @DisplayName("按状态列表、单任务状态和更新状态路径不冲突")
+    public void statusRoutesDoNotClash() throws Exception {
+        when(taskService.listTasksByStatus("RUNNING")).thenReturn(List.of());
+        TaskStatusResponse status = new TaskStatusResponse();
+        status.setTaskId(8L);
+        status.setStatus("QUEUED");
+        status.setProgress(10);
+        when(taskService.getTaskStatus(8L)).thenReturn(status);
+
+        mockMvc.perform(get("/api/tasks/status/{status}", "RUNNING"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isArray());
+
+        mockMvc.perform(get("/api/tasks/{taskId}/status", 8L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.taskId").value(8))
+                .andExpect(jsonPath("$.data.progress").value(10));
+
+        mockMvc.perform(put("/api/tasks/{taskId}/status", 8L)
+                        .with(csrf())
+                        .param("status", "SUCCESS"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("任务状态已更新"));
+
+        verify(taskService).listTasksByStatus("RUNNING");
+        verify(taskService).getTaskStatus(8L);
+        verify(taskService).updateTaskStatus(8L, "SUCCESS");
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("获取任务日志返回 logs 和 hasMore，默认 tail 为 100")
+    public void shouldReturnTaskLogs() throws Exception {
+        TaskLogsResponse logs = new TaskLogsResponse();
+        logs.setLogs("--- container mysql ---\nready");
+        logs.setHasMore(false);
+        when(taskService.getTaskLogs(4L, 100, null)).thenReturn(logs);
+
+        mockMvc.perform(get("/api/tasks/{taskId}/logs", 4L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.logs").value("--- container mysql ---\nready"))
+                .andExpect(jsonPath("$.data.hasMore").value(false));
+
+        verify(taskService).getTaskLogs(4L, 100, null);
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("任务日志不存在时返回 404")
+    public void shouldReturnNotFoundWhenTaskLogsMissing() throws Exception {
+        when(taskService.getTaskLogs(eq(9L), eq(100), isNull()))
+                .thenThrow(new BusinessException(ErrorCode.TASK_NOT_FOUND));
+
+        mockMvc.perform(get("/api/tasks/{taskId}/logs", 9L))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value(2001))
+                .andExpect(jsonPath("$.message").value("任务不存在"));
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("tail 超出 1 到 5000 时返回 400")
+    public void shouldRejectTailOutOfRange() throws Exception {
+        mockMvc.perform(get("/api/tasks/{taskId}/logs", 1L).param("tail", "0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value(ContainerLogWindow.TAIL_RANGE_MESSAGE));
+
+        mockMvc.perform(get("/api/tasks/{taskId}/logs", 1L).param("tail", "5001"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value(ContainerLogWindow.TAIL_RANGE_MESSAGE));
+
+        mockMvc.perform(get("/api/tasks/{taskId}/logs", 1L).param("tail", "abc"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004));
+
+        verify(taskService, never()).getTaskLogs(anyLong(), anyInt(), any());
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("非法 since 返回 400，合法 since 传给服务")
+    public void shouldRejectBadSinceAndPassValidSince() throws Exception {
+        mockMvc.perform(get("/api/tasks/{taskId}/logs", 1L).param("since", "yesterday"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value(ContainerLogWindow.SINCE_FORMAT_MESSAGE));
+
+        TaskLogsResponse logs = new TaskLogsResponse();
+        logs.setLogs("");
+        logs.setHasMore(true);
+        when(taskService.getTaskLogs(1L, 20, "2026-10-09T08:00:00Z")).thenReturn(logs);
+
+        mockMvc.perform(get("/api/tasks/{taskId}/logs", 1L)
+                        .param("tail", "20")
+                        .param("since", "2026-10-09T08:00:00Z"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.logs").value(""))
+                .andExpect(jsonPath("$.data.hasMore").value(true));
+
+        verify(taskService, never()).getTaskLogs(eq(1L), anyInt(), eq("yesterday"));
+        verify(taskService).getTaskLogs(1L, 20, "2026-10-09T08:00:00Z");
     }
 }

@@ -6,6 +6,8 @@ import com.github.dockerjava.api.command.CreateContainerResponse;
 import com.github.dockerjava.api.command.HealthState;
 import com.github.dockerjava.api.command.InspectContainerResponse;
 import com.github.dockerjava.api.model.*;
+import com.github.dockerjava.api.exception.NotFoundException;
+import com.github.dockerjava.api.exception.NotModifiedException;
 import com.sentinel.config.BusinessException;
 import com.sentinel.config.properties.DockerProperties;
 import com.sentinel.domain.Container;
@@ -236,6 +238,53 @@ public class DockerService {
      */
     public List<Container> getContainersByEnvironmentId(Long environmentId) {
         return containerMapper.findByEnvironmentId(environmentId);
+    }
+
+    /**
+     * 确认 Docker 守护进程可连通。不可用时抛出 DOCKER_ERROR。
+     */
+    public void assertDockerAvailable() {
+        try {
+            dockerClient.pingCmd().exec();
+        } catch (Exception ex) {
+            log.error("Docker 服务不可用", ex);
+            throw new BusinessException(ErrorCode.DOCKER_ERROR, "Docker 服务不可用");
+        }
+    }
+
+    /**
+     * 停止并强制删除容器，不修改 t_container。
+     * 容器不存在或已经停止时继续删除；容器已删除视为成功。
+     * 删除失败时抛出 DOCKER_ERROR，由调用方按容器粒度决定是否继续。
+     *
+     * @param containerId Docker 容器 ID，空值直接返回
+     */
+    public void stopAndRemoveContainer(String containerId) {
+        if (containerId == null || containerId.isBlank()) {
+            return;
+        }
+        try {
+            dockerClient.stopContainerCmd(containerId).exec();
+            log.info("容器已停止: containerId={}", containerId);
+        } catch (NotFoundException ex) {
+            log.info("容器已不存在，跳过停止: containerId={}", containerId);
+        } catch (NotModifiedException ex) {
+            log.info("容器已经停止，继续删除: containerId={}", containerId);
+        } catch (Exception ex) {
+            log.warn("停止容器失败，将继续尝试删除: containerId={}", containerId, ex);
+        }
+
+        try {
+            dockerClient.removeContainerCmd(containerId)
+                    .withForce(true)
+                    .exec();
+            log.info("容器已删除: containerId={}", containerId);
+        } catch (NotFoundException ex) {
+            log.info("容器已不存在，跳过删除: containerId={}", containerId);
+        } catch (Exception ex) {
+            log.warn("删除容器失败: containerId={}", containerId, ex);
+            throw new BusinessException(ErrorCode.DOCKER_ERROR, "删除容器失败");
+        }
     }
 
     /**

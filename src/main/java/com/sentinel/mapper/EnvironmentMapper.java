@@ -32,4 +32,24 @@ public interface EnvironmentMapper extends BaseMapper<Environment> {
      */
     @Select("SELECT * FROM t_environment WHERE status IN ('IDLE', 'READY') AND task_id IS NULL")
     List<Environment> findIdleEnvironments();
+
+    /**
+     * 按 id 倒序查询环境，最多返回 maxRows 条。
+     * status 为空时不过滤状态。
+     *
+     * @param status 环境状态，可空
+     * @param maxRows 最大条数
+     * @return 环境列表
+     */
+    @Select("<script>" +
+            "SELECT * FROM t_environment " +
+            "<where>" +
+            "<if test='status != null and status != \"\"'>" +
+            "AND status = #{status}" +
+            "</if>" +
+            "</where>" +
+            "ORDER BY id DESC " +
+            "LIMIT #{maxRows}" +
+            "</script>")
+    List<Environment> selectRecent(@Param("status") String status, @Param("maxRows") int maxRows);
 }

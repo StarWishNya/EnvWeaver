@@ -5,8 +5,11 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sentinel.config.BusinessException;
+import com.sentinel.domain.Container;
 import com.sentinel.domain.Task;
 import com.sentinel.dto.CreateTaskRequest;
+import com.sentinel.dto.TaskLogsResponse;
+import com.sentinel.dto.TaskStatusResponse;
 import com.sentinel.enums.ErrorCode;
 import com.sentinel.mapper.TaskMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -16,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Set;
 
@@ -32,10 +36,12 @@ public class TaskService {
             "PENDING", "QUEUED", "RUNNING", "SUCCESS", "FAILED", "CANCELLED");
 
     private final TaskMapper taskMapper;
+    private final DockerService dockerService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public TaskService(TaskMapper taskMapper) {
+    public TaskService(TaskMapper taskMapper, DockerService dockerService) {
         this.taskMapper = taskMapper;
+        this.dockerService = dockerService;
     }
 
     /**
@@ -157,6 +163,118 @@ public class TaskService {
         
         taskMapper.updateById(task);
         log.error("任务执行失败: taskId={}, error={}", taskId, errorMessage);
+    }
+
+    /**
+     * 任务状态与进度。没有进度列时按状态估算。
+     */
+    public TaskStatusResponse getTaskStatus(Long taskId) {
+        Task task = getTaskById(taskId);
+        TaskStatusResponse response = new TaskStatusResponse();
+        response.setTaskId(task.getId());
+        response.setStatus(task.getStatus());
+        response.setProgress(progressOf(task.getStatus()));
+        return response;
+    }
+
+    /**
+     * 任务日志。tail 必须在 1..5000；since 非法时 400。
+     * 容器日志的收集方式与诊断服务一致；Docker 不支持 since 时只按行首时间戳尽力过滤。
+     */
+    public TaskLogsResponse getTaskLogs(Long taskId, int tail, String since) {
+        ContainerLogWindow.checkTail(tail);
+        OffsetDateTime sinceTime = ContainerLogWindow.parseSince(since);
+        Task task = getTaskById(taskId);
+        return collectLogs(task, tail, sinceTime);
+    }
+
+    /**
+     * PENDING 0、QUEUED 10、RUNNING 50，终态 100。未知状态记 0。
+     */
+    static int progressOf(String status) {
+        if (status == null) {
+            return 0;
+        }
+        return switch (status) {
+            case "PENDING" -> 0;
+            case "QUEUED" -> 10;
+            case "RUNNING" -> 50;
+            case "SUCCESS", "FAILED", "CANCELLED" -> 100;
+            default -> 0;
+        };
+    }
+
+    private TaskLogsResponse collectLogs(Task task, int tail, OffsetDateTime sinceTime) {
+        TaskLogsResponse response = new TaskLogsResponse();
+        Long environmentId = task.getEnvironmentId();
+        if (environmentId == null) {
+            response.setLogs(fallbackLogs(task));
+            response.setHasMore(false);
+            return response;
+        }
+
+        List<Container> containers;
+        try {
+            containers = dockerService.getContainersByEnvironmentId(environmentId);
+        } catch (Exception ex) {
+            log.warn("查询环境容器失败，已跳过: environmentId={}, reason={}", environmentId, ex.getMessage());
+            response.setLogs(fallbackLogs(task));
+            response.setHasMore(false);
+            return response;
+        }
+        if (containers == null || containers.isEmpty()) {
+            response.setLogs(fallbackLogs(task));
+            response.setHasMore(false);
+            return response;
+        }
+
+        StringBuilder body = new StringBuilder();
+        boolean hasMore = false;
+        boolean sawContainer = false;
+        for (Container container : containers) {
+            if (container == null || !StringUtils.hasText(container.getContainerId())) {
+                continue;
+            }
+            sawContainer = true;
+            String raw;
+            try {
+                raw = dockerService.getContainerLogs(container.getContainerId(), tail);
+            } catch (Exception ex) {
+                log.warn("读取容器日志失败，已跳过: containerId={}, reason={}",
+                        container.getContainerId(), ex.getMessage());
+                continue;
+            }
+            if (ContainerLogWindow.countLines(raw) >= tail) {
+                hasMore = true;
+            }
+            String filtered = ContainerLogWindow.filterSince(raw, sinceTime);
+            if (!StringUtils.hasText(filtered)) {
+                continue;
+            }
+            if (body.length() > 0) {
+                body.append('\n');
+            }
+            String name = StringUtils.hasText(container.getContainerName())
+                    ? container.getContainerName() : container.getContainerId();
+            body.append("--- container ").append(name).append(" ---\n");
+            body.append(filtered.trim());
+        }
+
+        if (!sawContainer) {
+            response.setLogs(fallbackLogs(task));
+            response.setHasMore(false);
+            return response;
+        }
+        response.setLogs(body.toString());
+        response.setHasMore(hasMore);
+        return response;
+    }
+
+    private static String fallbackLogs(Task task) {
+        if (StringUtils.hasText(task.getErrorMessage())) {
+            return task.getErrorMessage();
+        }
+        return "";
     }
 
     /**

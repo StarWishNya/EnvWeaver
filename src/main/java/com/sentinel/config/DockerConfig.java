@@ -4,7 +4,7 @@ import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.core.DefaultDockerClientConfig;
 import com.github.dockerjava.core.DockerClientConfig;
 import com.github.dockerjava.core.DockerClientImpl;
-import com.github.dockerjava.httpclient5.ApacheDockerHttpClient;
+import com.github.dockerjava.zerodep.ZerodepDockerHttpClient;
 import com.github.dockerjava.transport.DockerHttpClient;
 import com.sentinel.config.properties.DockerProperties;
 import lombok.extern.slf4j.Slf4j;
@@ -46,7 +46,7 @@ public class DockerConfig {
 
         DockerClientConfig config = configBuilder.build();
 
-        DockerHttpClient httpClient = new ApacheDockerHttpClient.Builder()
+        DockerHttpClient httpClient = new ZerodepDockerHttpClient.Builder()
                 .dockerHost(config.getDockerHost())
                 .sslConfig(config.getSSLConfig())
                 .maxConnections(100)

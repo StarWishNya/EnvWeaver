@@ -269,18 +269,9 @@ curl -sS "$BASE/api/health"
 
 ## 文档承诺但未实现的接口
 
-`docs/api/api-specification.yaml` 的 server 是 `http://localhost:8080/api`。下列路径没有对应控制器，按「未实现（超出本次范围）」记录，没有补接口：
+`docs/api/api-specification.yaml` 中的路径现已全部有对应控制器，此前列在这里的诊断、当前用户、任务状态与日志、环境、监控接口都已补齐。
 
-- `GET /api/auth/me`
-- `GET /api/tasks/{taskId}/status`（现有的是 `PUT /api/tasks/{taskId}/status`，以及另一个 `GET /api/tasks/status/{status}`）
-- `GET /api/tasks/{taskId}/logs`
-- `GET /api/environments`
-- `GET /api/environments/{envId}`
-- `POST /api/environments/{envId}/release`
-- `GET /api/metrics`
-- `GET /api/metrics/health`（另有 `GET /api/health` 与 `GET /actuator/health`）
-
-`GET /api/diagnosis/{taskId}` 与 `POST /api/diagnosis/{taskId}` 现已实现。
+补接口时发现一个此前存在的缺陷：Docker 客户端用的 httpclient5 传输层与 Spring Boot 管理的 httpclient5 5.2 不兼容，运行时先报 `NoClassDefFoundError`，补齐类后又把 unix socket 当成 `localhost:2375`。所有真实 Docker 调用（读容器日志、停止和删除容器）因此一直失败，单元测试全是 mock 所以没有暴露。已改用 docker-java 自带的 zerodep 传输，并用真实容器验证了日志读取与环境释放。
 
 已实现但与文档字段不一致、本次未改契约：创建任务实际是 HTTP 200 而不是 201；列表参数是 `pageNum` / `pageSize`，数据在 `data.records`，不是 `page` / `size` 和 `data.content`；取消任务是 `POST /api/tasks/{id}/cancel`，不是 `DELETE /api/tasks/{id}`。
 

@@ -4,15 +4,18 @@ import com.sentinel.config.BusinessException;
 import com.sentinel.domain.User;
 import com.sentinel.dto.LoginRequest;
 import com.sentinel.dto.LoginResponse;
+import com.sentinel.dto.UserInfo;
 import com.sentinel.enums.ErrorCode;
 import com.sentinel.mapper.UserMapper;
 import com.sentinel.util.JwtUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -136,5 +139,44 @@ public class AuthService {
         }
         cacheService.addTokenToBlacklist(token, ttlSeconds);
         log.info("用户登出，Token 已按剩余有效期 {} 秒加入黑名单", ttlSeconds);
+    }
+
+    /**
+     * 当前认证用户的公开资料。从 SecurityContext 取用户名，再查库。
+     * 不返回密码。
+     */
+    public UserInfo getCurrentUser() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (!isAuthenticatedUser(authentication)) {
+            log.warn("获取当前用户失败：未认证");
+            throw new BusinessException(ErrorCode.UNAUTHORIZED);
+        }
+        String username = authentication.getName();
+        User user = userMapper.findByUsername(username);
+        if (user == null) {
+            log.warn("获取当前用户失败：用户不存在: {}", username);
+            throw new BusinessException(ErrorCode.UNAUTHORIZED);
+        }
+        log.info("获取当前用户信息: username={}", username);
+        UserInfo info = new UserInfo();
+        info.setId(user.getId());
+        info.setUsername(user.getUsername());
+        info.setEmail(user.getEmail());
+        info.setRole(user.getRole());
+        return info;
+    }
+
+    /**
+     * 匿名令牌的 isAuthenticated 也是 true，不能只看这个标志。
+     */
+    private static boolean isAuthenticatedUser(Authentication authentication) {
+        if (authentication == null || !authentication.isAuthenticated()) {
+            return false;
+        }
+        if (authentication instanceof AnonymousAuthenticationToken) {
+            return false;
+        }
+        String name = authentication.getName();
+        return StringUtils.hasText(name) && !"anonymousUser".equals(name);
     }
 }

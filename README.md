@@ -235,6 +235,21 @@ BASE_URL=http://localhost:8080 bash scripts/ai-smoke-test.sh
 
 脚本用 `admin` / `admin123` 登录，创建唯一任务，提交一段 MySQL `3306` 连接被拒绝、随后 `ApplicationContext` 启动失败的 Spring 日志，并在 90 秒内轮询到 `COMPLETED`。
 
+## 任务、环境与监控接口
+
+除 `GET /api/metrics/health` 外都需要登录。资源不存在时返回 HTTP 404。
+
+| 接口 | 说明 |
+| --- | --- |
+| `GET /api/auth/me` | 当前用户 `id`、`username`、`email`、`role` |
+| `GET /api/tasks/{taskId}/status` | `taskId`、`status`、`progress`（按状态推算：PENDING 0、QUEUED 10、RUNNING 50、结束态 100） |
+| `GET /api/tasks/{taskId}/logs?tail=100&since=` | 任务环境内各容器的尾部日志，`tail` 取 1 到 5000；`since` 为 ISO-8601 时间，按行首时间戳尽力过滤 |
+| `GET /api/environments?status=` | 环境列表，按 id 倒序，最多 500 条 |
+| `GET /api/environments/{envId}` | 环境详情，`portMappings` 与 `resourceUsage` 以对象返回 |
+| `POST /api/environments/{envId}/release` | 停止并删除环境内容器，环境变为 `IDLE`。已是 `IDLE` 或 `RELEASING` 时返回 400；有容器删除失败时环境变为 `ERROR` 并返回 503，可重试 |
+| `GET /api/metrics` | 主机 CPU、内存、磁盘与 Docker 容器数 |
+| `GET /api/metrics/health` | 匿名可访问，`{status, components:{db, redis, docker}}`；任一项 `DOWN` 时返回 503 |
+
 ## 配置说明
 
 详细配置说明请参考 [docs/](docs/) 目录下的文档。

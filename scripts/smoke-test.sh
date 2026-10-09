@@ -137,15 +137,64 @@ request POST "${BASE_URL}/api/tasks" "${AUTH[@]}" \
 expect_http "invalid create payload" '^400$'
 pass "invalid create payload rejected"
 
-# 9. Logout
+# 9. Current user
+request GET "${BASE_URL}/api/auth/me" "${AUTH[@]}"
+expect_http "GET /api/auth/me" '^200$'
+if [[ "$(json_get '.data.username' "$RESP_BODY")" != "admin" ]]; then
+  printf '%s\n' "$RESP_BODY" >&2
+  fail "auth/me returned a different user"
+fi
+if printf '%s' "$RESP_BODY" | grep -qi 'password'; then
+  fail "auth/me leaks a password field"
+fi
+pass "auth/me returns the logged-in user without password"
+
+# 10. Task status and logs
+request GET "${BASE_URL}/api/tasks/${TASK_ID}/status" "${AUTH[@]}"
+expect_http "GET /api/tasks/${TASK_ID}/status" '^200$'
+if [[ "$(json_get '.data.status' "$RESP_BODY")" != "CANCELLED" || "$(json_get '.data.progress' "$RESP_BODY")" != "100" ]]; then
+  printf '%s\n' "$RESP_BODY" >&2
+  fail "task status expected CANCELLED with progress 100"
+fi
+request GET "${BASE_URL}/api/tasks/${TASK_ID}/logs?tail=20" "${AUTH[@]}"
+expect_http "GET /api/tasks/${TASK_ID}/logs" '^200$'
+request GET "${BASE_URL}/api/tasks/${TASK_ID}/logs?tail=0" "${AUTH[@]}"
+expect_http "task logs with tail=0" '^400$'
+request GET "${BASE_URL}/api/tasks/999999999999/status" "${AUTH[@]}"
+expect_http "status of missing task" '^404$'
+
+# 11. Environments
+request GET "${BASE_URL}/api/environments" "${AUTH[@]}"
+expect_http "GET /api/environments" '^200$'
+request GET "${BASE_URL}/api/environments?status=BOGUS" "${AUTH[@]}"
+expect_http "environments with invalid status" '^400$'
+request GET "${BASE_URL}/api/environments/999999999999" "${AUTH[@]}"
+expect_http "missing environment" '^404$'
+request POST "${BASE_URL}/api/environments/999999999999/release" "${AUTH[@]}"
+expect_http "release missing environment" '^404$'
+
+# 12. Metrics
+request GET "${BASE_URL}/api/metrics" "${AUTH[@]}"
+expect_http "GET /api/metrics" '^200$'
+request GET "${BASE_URL}/api/metrics"
+expect_http "anonymous GET /api/metrics" '^401$'
+request GET "${BASE_URL}/api/metrics/health"
+expect_http "anonymous GET /api/metrics/health" '^(200|503)$'
+if ! printf '%s' "$RESP_BODY" | grep -q '"db":"UP"' || ! printf '%s' "$RESP_BODY" | grep -q '"redis":"UP"'; then
+  printf '%s\n' "$RESP_BODY" >&2
+  fail "metrics health expected db and redis UP"
+fi
+pass "metrics health reports db and redis UP"
+
+# 13. Logout
 request POST "${BASE_URL}/api/auth/logout" -H "Authorization: Bearer ${ACCESS_TOKEN}"
 expect_http "POST /api/auth/logout" '^200$'
 
-# 10. Old access token is rejected
+# 14. Old access token is rejected
 request GET "${BASE_URL}/api/tasks" -H "Authorization: Bearer ${ACCESS_TOKEN}"
 expect_http "blacklisted access token" '^(401|403)$'
 
-# 11. Refresh token cannot call a protected endpoint
+# 15. Refresh token cannot call a protected endpoint
 request GET "${BASE_URL}/api/tasks" -H "Authorization: Bearer ${REFRESH_TOKEN}"
 expect_http "refresh token on protected endpoint" '^(401|403)$'
 

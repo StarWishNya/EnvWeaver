@@ -3,8 +3,11 @@ package com.sentinel.service;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sentinel.config.BusinessException;
+import com.sentinel.domain.Container;
 import com.sentinel.domain.Task;
 import com.sentinel.dto.CreateTaskRequest;
+import com.sentinel.dto.TaskLogsResponse;
+import com.sentinel.dto.TaskStatusResponse;
 import com.sentinel.enums.ErrorCode;
 import com.sentinel.mapper.TaskMapper;
 import com.sentinel.testutil.CreateTaskRequestBuilder;
@@ -20,6 +23,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -35,6 +39,9 @@ public class TaskServiceTest {
 
     @Mock
     private TaskMapper taskMapper;
+
+    @Mock
+    private DockerService dockerService;
 
     @InjectMocks
     private TaskService taskService;
@@ -418,5 +425,217 @@ public class TaskServiceTest {
                 .hasFieldOrPropertyWithValue("code", ErrorCode.TASK_STATUS_INVALID.getCode());
 
         verify(taskMapper, never()).selectById(any());
+    }
+
+    @Test
+    @DisplayName("任务状态进度按状态估算")
+    public void shouldDeriveProgressFromStatus() {
+        Map<String, Integer> expected = Map.of(
+                "PENDING", 0,
+                "QUEUED", 10,
+                "RUNNING", 50,
+                "SUCCESS", 100,
+                "FAILED", 100,
+                "CANCELLED", 100
+        );
+        long id = 1L;
+        for (Map.Entry<String, Integer> entry : expected.entrySet()) {
+            Task task = TaskBuilder.aTask().withId(id).withStatus(entry.getKey()).build();
+            when(taskMapper.selectById(id)).thenReturn(task);
+
+            TaskStatusResponse response = taskService.getTaskStatus(id);
+
+            assertThat(response.getTaskId()).isEqualTo(id);
+            assertThat(response.getStatus()).isEqualTo(entry.getKey());
+            assertThat(response.getProgress()).isEqualTo(entry.getValue());
+            id++;
+        }
+    }
+
+    @Test
+    @DisplayName("未知状态进度为 0")
+    public void shouldUseZeroProgressForUnknownStatus() {
+        Task task = TaskBuilder.aTask().withId(3L).withStatus("PAUSED").build();
+        when(taskMapper.selectById(3L)).thenReturn(task);
+
+        TaskStatusResponse response = taskService.getTaskStatus(3L);
+
+        assertThat(response.getProgress()).isZero();
+    }
+
+    @Test
+    @DisplayName("查询不存在的任务状态返回任务不存在")
+    public void shouldThrowWhenTaskStatusMissing() {
+        when(taskMapper.selectById(9L)).thenReturn(null);
+
+        assertThatThrownBy(() -> taskService.getTaskStatus(9L))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", ErrorCode.TASK_NOT_FOUND.getCode());
+    }
+
+    @Test
+    @DisplayName("非法 tail 或 since 在查库前拒绝")
+    public void shouldRejectBadTailAndSinceBeforeLookup() {
+        assertThatThrownBy(() -> taskService.getTaskLogs(1L, 0, null))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", ErrorCode.VALIDATION_ERROR.getCode())
+                .hasMessage(ContainerLogWindow.TAIL_RANGE_MESSAGE);
+        assertThatThrownBy(() -> taskService.getTaskLogs(1L, 5001, "2026-10-09T00:00:00Z"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage(ContainerLogWindow.TAIL_RANGE_MESSAGE);
+        assertThatThrownBy(() -> taskService.getTaskLogs(1L, 100, "yesterday"))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", ErrorCode.VALIDATION_ERROR.getCode())
+                .hasMessage(ContainerLogWindow.SINCE_FORMAT_MESSAGE);
+
+        verifyNoInteractions(taskMapper);
+        verifyNoInteractions(dockerService);
+    }
+
+    @Test
+    @DisplayName("没有环境时回退到错误信息")
+    public void shouldFallBackToErrorMessageWhenEnvironmentMissing() {
+        Task task = TaskBuilder.aTask().withId(4L).withEnvironmentId(null).withErrorMessage("boom").build();
+        when(taskMapper.selectById(4L)).thenReturn(task);
+
+        TaskLogsResponse response = taskService.getTaskLogs(4L, 100, null);
+
+        assertThat(response.getLogs()).isEqualTo("boom");
+        assertThat(response.isHasMore()).isFalse();
+        verifyNoInteractions(dockerService);
+    }
+
+    @Test
+    @DisplayName("没有环境也没有错误信息时日志为空")
+    public void shouldReturnEmptyLogsWhenNothingToShow() {
+        Task task = TaskBuilder.aTask().withId(4L).withEnvironmentId(null).withErrorMessage("  ").build();
+        when(taskMapper.selectById(4L)).thenReturn(task);
+
+        TaskLogsResponse response = taskService.getTaskLogs(4L, 1, "2026-10-09T08:00:00");
+
+        assertThat(response.getLogs()).isEmpty();
+        assertThat(response.isHasMore()).isFalse();
+    }
+
+    @Test
+    @DisplayName("环境没有容器时回退到错误信息")
+    public void shouldFallBackWhenContainerListEmpty() {
+        Task task = TaskBuilder.aTask().withId(5L).withEnvironmentId(9L).withErrorMessage("env empty").build();
+        when(taskMapper.selectById(5L)).thenReturn(task);
+        when(dockerService.getContainersByEnvironmentId(9L)).thenReturn(List.of());
+
+        TaskLogsResponse response = taskService.getTaskLogs(5L, 100, null);
+
+        assertThat(response.getLogs()).isEqualTo("env empty");
+        assertThat(response.isHasMore()).isFalse();
+        verify(dockerService, never()).getContainerLogs(anyString(), anyInt());
+    }
+
+    @Test
+    @DisplayName("查询容器失败时回退到错误信息")
+    public void shouldFallBackWhenContainerQueryFails() {
+        Task task = TaskBuilder.aTask().withId(5L).withEnvironmentId(9L).withErrorMessage("query failed").build();
+        when(taskMapper.selectById(5L)).thenReturn(task);
+        when(dockerService.getContainersByEnvironmentId(9L)).thenThrow(new RuntimeException("db down"));
+
+        TaskLogsResponse response = taskService.getTaskLogs(5L, 100, null);
+
+        assertThat(response.getLogs()).isEqualTo("query failed");
+        assertThat(response.isHasMore()).isFalse();
+    }
+
+    @Test
+    @DisplayName("拼接容器日志并在行数达到 tail 时标记 hasMore")
+    public void shouldCollectContainerLogsWithHeaders() {
+        Task task = TaskBuilder.aTask().withId(6L).withEnvironmentId(8L).withErrorMessage("should-not-appear").build();
+        when(taskMapper.selectById(6L)).thenReturn(task);
+
+        Container mysql = new Container();
+        mysql.setContainerId("c1");
+        mysql.setContainerName("mysql");
+        Container redis = new Container();
+        redis.setContainerId("c2");
+        redis.setContainerName("redis");
+        Container blank = new Container();
+        blank.setContainerId(" ");
+        when(dockerService.getContainersByEnvironmentId(8L)).thenReturn(Arrays.asList(null, blank, mysql, redis));
+        when(dockerService.getContainerLogs("c1", 2)).thenReturn("a\nb\n");
+        when(dockerService.getContainerLogs("c2", 2)).thenReturn("only-one");
+
+        TaskLogsResponse response = taskService.getTaskLogs(6L, 2, null);
+
+        assertThat(response.getLogs()).isEqualTo(
+                "--- container mysql ---\na\nb\n--- container redis ---\nonly-one");
+        assertThat(response.isHasMore()).isTrue();
+        assertThat(response.getLogs()).doesNotContain("should-not-appear");
+    }
+
+    @Test
+    @DisplayName("容器名为空时用容器 ID，读取失败的容器被跳过")
+    public void shouldSkipFailedContainerAndUseIdAsName() {
+        Task task = TaskBuilder.aTask().withId(7L).withEnvironmentId(8L).withErrorMessage("kept-out").build();
+        when(taskMapper.selectById(7L)).thenReturn(task);
+
+        Container ok = new Container();
+        ok.setContainerId("cid-ok");
+        Container bad = new Container();
+        bad.setContainerId("cid-bad");
+        bad.setContainerName("broken");
+        when(dockerService.getContainersByEnvironmentId(8L)).thenReturn(List.of(bad, ok));
+        when(dockerService.getContainerLogs("cid-bad", 100)).thenThrow(new RuntimeException("docker log down"));
+        when(dockerService.getContainerLogs("cid-ok", 100)).thenReturn("alive");
+
+        TaskLogsResponse response = taskService.getTaskLogs(7L, 100, null);
+
+        assertThat(response.getLogs()).isEqualTo("--- container cid-ok ---\nalive");
+        assertThat(response.isHasMore()).isFalse();
+        assertThat(response.getLogs()).doesNotContain("broken").doesNotContain("kept-out");
+    }
+
+    @Test
+    @DisplayName("全部容器日志读取失败时不回退错误信息")
+    public void shouldReturnEmptyWhenEveryContainerLogFails() {
+        Task task = TaskBuilder.aTask().withId(7L).withEnvironmentId(8L).withErrorMessage("boom").build();
+        when(taskMapper.selectById(7L)).thenReturn(task);
+        Container bad = new Container();
+        bad.setContainerId("cid-bad");
+        bad.setContainerName("broken");
+        when(dockerService.getContainersByEnvironmentId(8L)).thenReturn(List.of(bad));
+        when(dockerService.getContainerLogs("cid-bad", 100)).thenThrow(new RuntimeException("docker log down"));
+
+        TaskLogsResponse response = taskService.getTaskLogs(7L, 100, null);
+
+        assertThat(response.getLogs()).isEmpty();
+        assertThat(response.isHasMore()).isFalse();
+    }
+
+    @Test
+    @DisplayName("since 只丢掉带时间戳且更早的行")
+    public void shouldFilterTimestampedLinesBySince() {
+        Task task = TaskBuilder.aTask().withId(8L).withEnvironmentId(3L).build();
+        when(taskMapper.selectById(8L)).thenReturn(task);
+        Container mysql = new Container();
+        mysql.setContainerId("c1");
+        mysql.setContainerName("mysql");
+        when(dockerService.getContainersByEnvironmentId(3L)).thenReturn(List.of(mysql));
+        when(dockerService.getContainerLogs("c1", 2)).thenReturn(
+                "2026-10-09T07:00:00.000000000Z old\nplain\n2026-10-09T09:00:00.000000000Z new\n");
+
+        TaskLogsResponse response = taskService.getTaskLogs(8L, 2, "2026-10-09T08:00:00Z");
+
+        assertThat(response.getLogs()).isEqualTo(
+                "--- container mysql ---\nplain\n2026-10-09T09:00:00.000000000Z new");
+        assertThat(response.isHasMore()).isTrue();
+    }
+
+    @Test
+    @DisplayName("日志不存在时查询日志失败")
+    public void shouldThrowWhenTaskLogsMissing() {
+        when(taskMapper.selectById(44L)).thenReturn(null);
+
+        assertThatThrownBy(() -> taskService.getTaskLogs(44L, 100, null))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", ErrorCode.TASK_NOT_FOUND.getCode());
+        verifyNoInteractions(dockerService);
     }
 }

@@ -5,6 +5,9 @@ import com.sentinel.config.BusinessException;
 import com.sentinel.domain.Task;
 import com.sentinel.dto.ApiResponse;
 import com.sentinel.dto.CreateTaskRequest;
+import com.sentinel.dto.TaskLogsResponse;
+import com.sentinel.dto.TaskStatusResponse;
+import com.sentinel.service.ContainerLogWindow;
 import com.sentinel.enums.ErrorCode;
 import com.sentinel.service.TaskService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -81,6 +84,32 @@ public class TaskController {
             @Parameter(description = "任务状态") @PathVariable String status) {
         List<Task> tasks = taskService.listTasksByStatus(status);
         return ApiResponse.success(tasks);
+    }
+
+    /**
+     * 获取单个任务的状态。路径限定为数字 ID，避免和 GET /status/{status} 冲突。
+     */
+    @GetMapping("/{taskId:[0-9]+}/status")
+    @Operation(summary = "获取任务状态", description = "返回任务状态和进度")
+    public ApiResponse<TaskStatusResponse> getTaskStatus(
+            @Parameter(description = "任务 ID") @PathVariable Long taskId) {
+        log.info("查询任务状态: taskId={}", taskId);
+        return ApiResponse.success(taskService.getTaskStatus(taskId));
+    }
+
+    /**
+     * 获取任务日志。tail 默认 100，合法范围 1..5000；since 为 ISO-8601 日期时间。
+     */
+    @GetMapping("/{taskId:[0-9]+}/logs")
+    @Operation(summary = "获取任务日志", description = "返回环境容器日志，可按行数和时间过滤")
+    public ApiResponse<TaskLogsResponse> getTaskLogs(
+            @Parameter(description = "任务 ID") @PathVariable Long taskId,
+            @Parameter(description = "返回最后 N 行") @RequestParam(defaultValue = "100") int tail,
+            @Parameter(description = "从指定时间开始") @RequestParam(required = false) String since) {
+        ContainerLogWindow.checkTail(tail);
+        ContainerLogWindow.parseSince(since);
+        log.info("查询任务日志: taskId={}, tail={}", taskId, tail);
+        return ApiResponse.success(taskService.getTaskLogs(taskId, tail, since));
     }
 
     /**

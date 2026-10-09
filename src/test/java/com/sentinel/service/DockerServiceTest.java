@@ -11,12 +11,16 @@ import com.github.dockerjava.api.command.LogContainerCmd;
 import com.github.dockerjava.api.command.RemoveContainerCmd;
 import com.github.dockerjava.api.command.StartContainerCmd;
 import com.github.dockerjava.api.command.StopContainerCmd;
+import com.github.dockerjava.api.command.PingCmd;
+import com.github.dockerjava.api.exception.NotFoundException;
+import com.github.dockerjava.api.exception.NotModifiedException;
 import com.github.dockerjava.api.model.ExposedPort;
 import com.github.dockerjava.api.model.Frame;
 import com.github.dockerjava.api.model.HostConfig;
 import com.github.dockerjava.api.model.StreamType;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.sentinel.config.BusinessException;
+import com.sentinel.enums.ErrorCode;
 import com.sentinel.config.properties.DockerProperties;
 import com.sentinel.domain.Container;
 import com.sentinel.mapper.ContainerMapper;
@@ -308,6 +312,102 @@ public class DockerServiceTest {
     }
 
     @Test
+    @DisplayName("Docker 可达时探测成功")
+    public void shouldPingDocker_whenAvailable() {
+        PingCmd pingCmd = mock(PingCmd.class);
+        when(dockerClient.pingCmd()).thenReturn(pingCmd);
+        doNothing().when(pingCmd).exec();
+
+        dockerService.assertDockerAvailable();
+
+        verify(pingCmd).exec();
+    }
+
+    @Test
+    @DisplayName("Docker 不可达时探测失败")
+    public void shouldThrow_whenDockerPingFails() {
+        PingCmd pingCmd = mock(PingCmd.class);
+        when(dockerClient.pingCmd()).thenReturn(pingCmd);
+        doThrow(new RuntimeException("connection refused")).when(pingCmd).exec();
+
+        assertThatThrownBy(() -> dockerService.assertDockerAvailable())
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", ErrorCode.DOCKER_ERROR.getCode())
+                .hasMessage("Docker 服务不可用");
+    }
+
+    @Test
+    @DisplayName("停止并删除容器时不改容器表")
+    public void shouldStopAndRemoveWithoutTouchingContainerRow() {
+        stubStop("cid-free", null);
+        RemoveContainerCmd removeCmd = stubForceRemove("cid-free", null);
+
+        dockerService.stopAndRemoveContainer("cid-free");
+
+        verify(dockerClient).stopContainerCmd("cid-free");
+        verify(removeCmd).withForce(eq(Boolean.TRUE));
+        verify(removeCmd).exec();
+        verify(containerMapper, never()).findByContainerId(anyString());
+        verify(containerMapper, never()).updateById(any(Container.class));
+    }
+
+    @Test
+    @DisplayName("容器已不存在时停止和删除都视为成功")
+    public void shouldIgnoreMissingContainerWhenStopAndRemove() {
+        stubStop("cid-gone", new NotFoundException("missing"));
+        stubForceRemove("cid-gone", new NotFoundException("missing"));
+
+        dockerService.stopAndRemoveContainer("cid-gone");
+
+        verify(dockerClient).stopContainerCmd("cid-gone");
+        verify(dockerClient).removeContainerCmd("cid-gone");
+    }
+
+    @Test
+    @DisplayName("容器已停止时仍强制删除")
+    public void shouldRemoveContainer_whenAlreadyStopped() {
+        stubStop("cid-stopped", new NotModifiedException("not modified"));
+        RemoveContainerCmd removeCmd = stubForceRemove("cid-stopped", null);
+
+        dockerService.stopAndRemoveContainer("cid-stopped");
+
+        verify(removeCmd).exec();
+    }
+
+    @Test
+    @DisplayName("停止失败时仍尝试删除")
+    public void shouldStillRemove_whenStopFails() {
+        stubStop("cid-stop-fail", new RuntimeException("stop failed"));
+        RemoveContainerCmd removeCmd = stubForceRemove("cid-stop-fail", null);
+
+        dockerService.stopAndRemoveContainer("cid-stop-fail");
+
+        verify(removeCmd).exec();
+    }
+
+    @Test
+    @DisplayName("删除失败时抛出 Docker 错误")
+    public void shouldThrow_whenRemoveFailsDuringRelease() {
+        stubStop("cid-rm-fail", null);
+        stubForceRemove("cid-rm-fail", new RuntimeException("remove failed"));
+
+        assertThatThrownBy(() -> dockerService.stopAndRemoveContainer("cid-rm-fail"))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", ErrorCode.DOCKER_ERROR.getCode())
+                .hasMessage("删除容器失败");
+    }
+
+    @Test
+    @DisplayName("容器 ID 为空时不访问 Docker")
+    public void shouldSkipDocker_whenContainerIdBlank() {
+        dockerService.stopAndRemoveContainer(null);
+        dockerService.stopAndRemoveContainer("  ");
+
+        verify(dockerClient, never()).stopContainerCmd(anyString());
+        verify(dockerClient, never()).removeContainerCmd(anyString());
+    }
+
+    @Test
     @DisplayName("容器日志按 UTF-8 解码并忽略空 payload")
     public void shouldDecodeContainerLogsAsUtf8AndSkipNullPayload() throws Exception {
         LogContainerCmd logCmd = stubLogCmd("cid-logs");
@@ -397,6 +497,17 @@ public class DockerServiceTest {
             doThrow(execError).when(removeCmd).exec();
         }
         return removeCmd;
+    }
+
+    private StopContainerCmd stubStop(String containerId, RuntimeException execError) {
+        StopContainerCmd stopCmd = mock(StopContainerCmd.class);
+        when(dockerClient.stopContainerCmd(containerId)).thenReturn(stopCmd);
+        if (execError == null) {
+            doNothing().when(stopCmd).exec();
+        } else {
+            doThrow(execError).when(stopCmd).exec();
+        }
+        return stopCmd;
     }
 
     private CreateContainerResponse created(String containerId) {

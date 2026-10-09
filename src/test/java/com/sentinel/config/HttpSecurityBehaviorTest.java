@@ -48,6 +48,39 @@ class HttpSecurityBehaviorTest {
     }
 
     @Test
+    @DisplayName("未登录访问系统指标返回 401")
+    void anonymousMetricsIsUnauthorized() throws Exception {
+        HttpResponse<String> response = send(HttpRequest.newBuilder(uri("/api/metrics")).GET().build());
+
+        assertThat(response.statusCode()).isEqualTo(401);
+        assertThat(response.body()).contains("\"code\":1001").contains("未授权，请先登录");
+    }
+
+    @Test
+    @DisplayName("匿名可以访问组件健康检查")
+    void anonymousMetricsHealthIsReachable() throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(uri("/api/metrics/health"))
+                .timeout(Duration.ofSeconds(15))
+                .GET()
+                .build();
+        HttpResponse<String> response = send(request);
+
+        assertThat(response.statusCode()).isIn(200, 503);
+        if (response.statusCode() == 200) {
+            assertThat(response.body()).contains("\"status\":\"UP\"");
+        } else {
+            assertThat(response.body()).contains("\"status\":\"DOWN\"");
+        }
+        assertThat(response.body())
+                .contains("\"components\"")
+                .contains("\"db\"")
+                .contains("\"redis\"")
+                .contains("\"docker\"")
+                .doesNotContain("\"code\"")
+                .doesNotContain("Exception");
+    }
+
+    @Test
     @DisplayName("匿名健康检查只有状态，没有磁盘和数据库详情")
     void healthHidesDetailsFromAnonymous() throws Exception {
         HttpResponse<String> response = send(HttpRequest.newBuilder(uri("/actuator/health")).GET().build());
