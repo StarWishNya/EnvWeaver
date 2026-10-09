@@ -26,7 +26,7 @@ services:
       # MySQL 配置文件
       - ./docker/mysql/my.cnf:/etc/mysql/conf.d/my.cnf:ro
       # 初始化脚本
-      - ./docs/database/mysql-schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./src/main/resources/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci

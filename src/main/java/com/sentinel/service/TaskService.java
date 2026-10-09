@@ -2,17 +2,22 @@ package com.sentinel.service;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sentinel.config.BusinessException;
 import com.sentinel.domain.Task;
 import com.sentinel.dto.CreateTaskRequest;
 import com.sentinel.enums.ErrorCode;
 import com.sentinel.mapper.TaskMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 任务服务
@@ -23,7 +28,11 @@ import java.util.List;
 @Service
 public class TaskService {
 
+    private static final Set<String> TASK_STATUSES = Set.of(
+            "PENDING", "QUEUED", "RUNNING", "SUCCESS", "FAILED", "CANCELLED");
+
     private final TaskMapper taskMapper;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public TaskService(TaskMapper taskMapper) {
         this.taskMapper = taskMapper;
@@ -41,11 +50,15 @@ public class TaskService {
         task.setTaskCode(request.getTaskCode());
         task.setServiceId(request.getServiceId());
         task.setTestType(request.getTestType());
-        task.setDependencies(request.getDependencies());
+        task.setDependencies(normalizeDependencies(request.getDependencies()));
         task.setStatus("PENDING");
         task.setPriority(request.getPriority());
-        
-        taskMapper.insert(task);
+
+        try {
+            taskMapper.insert(task);
+        } catch (DuplicateKeyException e) {
+            throw new BusinessException(ErrorCode.RESOURCE_ALREADY_EXISTS, "任务编码已存在");
+        }
         log.info("任务创建成功: taskId={}, taskCode={}", task.getId(), task.getTaskCode());
         
         return task;
@@ -96,6 +109,9 @@ public class TaskService {
      */
     @Transactional
     public void updateTaskStatus(Long taskId, String status) {
+        if (!TASK_STATUSES.contains(status)) {
+            throw new BusinessException(ErrorCode.TASK_STATUS_INVALID);
+        }
         Task task = getTaskById(taskId);
         task.setStatus(status);
         
@@ -141,5 +157,20 @@ public class TaskService {
         
         taskMapper.updateById(task);
         log.error("任务执行失败: taskId={}, error={}", taskId, errorMessage);
+    }
+
+    /**
+     * 依赖列是 MySQL JSON。空值写成 null；非法 JSON 在入库前拒绝，避免 500。
+     */
+    private String normalizeDependencies(String dependencies) {
+        if (!StringUtils.hasText(dependencies)) {
+            return null;
+        }
+        try {
+            objectMapper.readTree(dependencies);
+        } catch (JsonProcessingException e) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "依赖列表必须是合法 JSON");
+        }
+        return dependencies;
     }
 }

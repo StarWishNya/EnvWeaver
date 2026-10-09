@@ -2,6 +2,8 @@ package com.sentinel.config.properties;
 
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
@@ -15,10 +17,15 @@ import org.springframework.validation.annotation.Validated;
 public class JwtProperties {
 
     /**
-     * JWT 密钥，用于签名和验证 Token
-     * 生产环境必须使用环境变量配置
+     * JWT 密钥，用于签名和验证 Token。
+     * 必须通过环境变量 JWT_SECRET 注入（至少 32 个字符），不允许默认值或未解析的 ${...} 占位符。
      */
-    @NotBlank(message = "JWT 密钥不能为空")
+    @NotBlank(message = "JWT 密钥不能为空，请设置环境变量 JWT_SECRET（至少 32 个字符）")
+    @Size(min = 32, message = "JWT 密钥长度不能少于 32 个字符，请设置环境变量 JWT_SECRET")
+    @Pattern(
+            regexp = "^(?!.*\\$\\{).*$",
+            message = "JWT 密钥仍是未解析的占位符，请设置环境变量 JWT_SECRET（至少 32 个字符，可用 openssl rand -base64 48 生成）"
+    )
     private String secret;
 
     /**

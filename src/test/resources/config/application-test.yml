@@ -1,0 +1,28 @@
+# ============================================================================
+# 测试 classpath 覆盖配置（仅 src/test/resources）
+# Spring Boot 先加载 classpath:/ ，再加载 classpath:/config/ ，
+# 因此这里只覆盖本机跑测试所需的键，其余仍沿用 application-test.yml。
+# ============================================================================
+
+spring:
+  datasource:
+    url: "jdbc:mysql://${DB_HOST:127.0.0.1}:${DB_PORT:3306}/${DB_NAME:sentinel}?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai"
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:root}
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 1
+
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      # 空密码表示不发送 AUTH（本地 Redis 默认无密码）
+      password: "${REDIS_PASSWORD:}"
+
+# 仅测试使用的固定密钥（>= 48 字符）。环境变量 JWT_SECRET 仍可覆盖。
+jwt:
+  secret: ${JWT_SECRET:sentinel-test-only-jwt-secret-key-0123456789abcdef}
+
+logging:
+  file:
+    name: target/logs/sentinel-test.log

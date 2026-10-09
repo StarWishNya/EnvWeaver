@@ -138,7 +138,7 @@ CREATE TABLE t_user (
 -- ============================================================
 -- 初始化管理员用户（密码: admin123，BCrypt 加密）
 INSERT INTO t_user (username, password, email, role) VALUES
-('admin', '$2a$10$N.zmdr9k7uOCQb376NoUnuTJ8iAt6Z5EHsM8lE9lBOsl7iAt6Z5EH', 'admin@sentinel.local', 'ADMIN');
+('admin', '$2a$10$vnTdr59Hm8233GyT8lke6OnrF8uwmsQ0gv0aa6p93DxpqOeLmSjVO', 'admin@sentinel.local', 'ADMIN');
 
 INSERT INTO t_system_config (config_key, config_value, value_type, description) VALUES
 ('max_concurrent_environments', '10', 'INT', '最大并发环境数'),

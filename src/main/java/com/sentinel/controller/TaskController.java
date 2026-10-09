@@ -1,9 +1,11 @@
 package com.sentinel.controller;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.sentinel.config.BusinessException;
 import com.sentinel.domain.Task;
 import com.sentinel.dto.ApiResponse;
 import com.sentinel.dto.CreateTaskRequest;
+import com.sentinel.enums.ErrorCode;
 import com.sentinel.service.TaskService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -63,6 +65,9 @@ public class TaskController {
             @Parameter(description = "页码") @RequestParam(defaultValue = "1") int pageNum,
             @Parameter(description = "每页大小") @RequestParam(defaultValue = "10") int pageSize,
             @Parameter(description = "任务状态") @RequestParam(required = false) String status) {
+        if (pageNum < 1 || pageSize < 1) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "分页参数不合法");
+        }
         IPage<Task> page = taskService.listTasks(pageNum, pageSize, status);
         return ApiResponse.success(page);
     }

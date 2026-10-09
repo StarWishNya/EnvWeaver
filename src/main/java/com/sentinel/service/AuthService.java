@@ -16,6 +16,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 
@@ -33,6 +34,7 @@ public class AuthService {
     private final JwtUtil jwtUtil;
     private final LoginAttemptService loginAttemptService;
     private final PasswordEncoder passwordEncoder;
+    private final CacheService cacheService;
 
     @Value("${jwt.expiration}")
     private Long jwtExpiration;
@@ -41,12 +43,14 @@ public class AuthService {
                       UserMapper userMapper,
                       JwtUtil jwtUtil,
                       LoginAttemptService loginAttemptService,
-                      PasswordEncoder passwordEncoder) {
+                      PasswordEncoder passwordEncoder,
+                      CacheService cacheService) {
         this.authenticationManager = authenticationManager;
         this.userMapper = userMapper;
         this.jwtUtil = jwtUtil;
         this.loginAttemptService = loginAttemptService;
         this.passwordEncoder = passwordEncoder;
+        this.cacheService = cacheService;
     }
 
     /**
@@ -120,8 +124,17 @@ public class AuthService {
      * @param token JWT Token
      */
     public void logout(String token) {
-        // 将 Token 加入黑名单
-        // 注意：这里需要从 CacheService 注入，暂时省略
-        log.info("用户登出");
+        if (!StringUtils.hasText(token)) {
+            log.warn("登出失败：Token 为空");
+            return;
+        }
+        // 按令牌剩余寿命拉黑，不能用 cache.token-blacklist-ttl（通常短于访问令牌寿命）
+        long ttlSeconds = jwtUtil.getRemainingValiditySeconds(token);
+        if (ttlSeconds <= 0) {
+            log.info("用户登出：Token 已过期或无效，无需加入黑名单");
+            return;
+        }
+        cacheService.addTokenToBlacklist(token, ttlSeconds);
+        log.info("用户登出，Token 已按剩余有效期 {} 秒加入黑名单", ttlSeconds);
     }
 }

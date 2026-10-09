@@ -26,7 +26,9 @@ spring:
       password: ${REDIS_PASSWORD}
       database: ${REDIS_DATABASE:0}
       timeout: 5000ms
-      ssl: ${REDIS_SSL:false}
+      # Boot 3.1 的 RedisProperties.Ssl 是对象，标量 ssl 无法绑定，必须写 ssl.enabled
+      ssl:
+        enabled: ${REDIS_SSL:false}
       lettuce:
         pool:
           max-active: 32

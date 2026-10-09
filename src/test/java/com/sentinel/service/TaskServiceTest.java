@@ -8,6 +8,7 @@ import com.sentinel.dto.CreateTaskRequest;
 import com.sentinel.enums.ErrorCode;
 import com.sentinel.mapper.TaskMapper;
 import com.sentinel.testutil.CreateTaskRequestBuilder;
+import org.springframework.dao.DuplicateKeyException;
 import com.sentinel.testutil.TaskBuilder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -383,5 +384,39 @@ public class TaskServiceTest {
 
         // Then
         assertThat(result).isEmpty();
+    }
+
+    @Test
+    @DisplayName("重复任务编码转为业务异常")
+    public void shouldThrowWhenTaskCodeDuplicated() {
+        when(taskMapper.insert(any(Task.class))).thenThrow(new DuplicateKeyException("dup"));
+
+        assertThatThrownBy(() -> taskService.createTask(testRequest))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", ErrorCode.RESOURCE_ALREADY_EXISTS.getCode())
+                .hasMessage("任务编码已存在");
+    }
+
+    @Test
+    @DisplayName("非法依赖 JSON 不入库")
+    public void shouldRejectInvalidDependenciesJson() {
+        testRequest.setDependencies("not-json");
+
+        assertThatThrownBy(() -> taskService.createTask(testRequest))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", ErrorCode.VALIDATION_ERROR.getCode())
+                .hasMessage("依赖列表必须是合法 JSON");
+
+        verify(taskMapper, never()).insert(any(Task.class));
+    }
+
+    @Test
+    @DisplayName("未知任务状态被拒绝")
+    public void shouldRejectUnknownStatus() {
+        assertThatThrownBy(() -> taskService.updateTaskStatus(1L, "NOT_A_STATUS"))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", ErrorCode.TASK_STATUS_INVALID.getCode());
+
+        verify(taskMapper, never()).selectById(any());
     }
 }

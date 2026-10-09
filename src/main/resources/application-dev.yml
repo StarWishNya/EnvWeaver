@@ -44,7 +44,6 @@ mybatis-plus:
   type-aliases-package: com.sentinel.domain
   configuration:
     map-underscore-to-camel-case: true
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
   global-config:
     db-config:
       id-type: auto
@@ -53,8 +52,8 @@ mybatis-plus:
       logic-not-delete-value: 0
 
 # JWT 配置（开发环境）
+# 密钥不在此硬编码，统一走 application.yml 的 ${JWT_SECRET}（至少 32 个字符）
 jwt:
-  secret: sentinel-dev-secret-key-2024-change-in-production
   expiration: 86400000  # 24小时
   refresh-expiration: 604800000  # 7天
 
@@ -100,12 +99,13 @@ docker:
     memory-limit: 512
     cpu-limit: 1.0
 
-# 日志配置（开发环境 - DEBUG 级别）
+# 日志配置（开发环境）。Mapper 保持 INFO，避免 DEBUG SQL 把密码哈希打进参数日志。
 logging:
   level:
     root: INFO
     com.sentinel: DEBUG
-    com.baomidou.mybatisplus: DEBUG
+    com.sentinel.mapper: INFO
+    com.baomidou.mybatisplus: INFO
     org.springframework.security: DEBUG
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n"

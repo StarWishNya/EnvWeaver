@@ -7,7 +7,7 @@ import com.sentinel.dto.CreateTaskRequest;
  */
 public class CreateTaskRequestBuilder {
 
-    private String taskCode = "TEST-" + System.currentTimeMillis();
+    private String taskCode = "TEST-" + TestUtils.uniqueToken();
     private String serviceId = "test-service";
     private String testType = "UNIT_TEST";
     private String dependencies = "[\"mysql:8.0\"]";

@@ -29,13 +29,13 @@
 cp .env.example .env
 ```
 
-编辑 `.env` 文件，配置必要的环境变量（开发环境可使用默认值）：
+编辑 `.env` 文件。`JWT_SECRET` 为必填（至少 32 个字符），主配置不再提供默认值；其余项按示例填写：
 
 ```bash
 # 数据库配置
 DB_PASSWORD=root
 
-# JWT 密钥（生产环境必须修改）
+# JWT 密钥（至少 32 个字符，必填）
 JWT_SECRET=your-super-secret-jwt-key-change-in-production
 
 # AI 服务配置（可选）
@@ -50,7 +50,7 @@ AI_PROVIDER=ollama  # 可选: ollama, openai, custom
 
 ```bash
 # 方式一：使用启动脚本（推荐）
-./start-dev.sh
+./scripts/start-dev.sh
 
 # 方式二：直接使用 docker-compose
 docker-compose up -d
@@ -77,6 +77,8 @@ mvn clean package
 
 ### 4. 运行应用
 
+应用启动必须提供 `JWT_SECRET`（至少 32 个字符）。主配置不再内置默认密钥，可通过环境变量提供，或使用已被 `.gitignore` 忽略的 `.env` 文件（`cp .env.example .env` 后设置 `JWT_SECRET`；`application.yml` 会导入 `optional:file:.env[.properties]`）。
+
 ```bash
 # 开发环境（默认）
 mvn spring-boot:run
@@ -97,7 +99,7 @@ java -jar target/sentinel-1.0.0-SNAPSHOT.jar --spring.profiles.active=prod
 
 ```bash
 # 使用停止脚本（推荐）
-./stop-dev.sh
+./scripts/stop-dev.sh
 
 # 或直接使用 docker-compose
 docker-compose down
@@ -111,7 +113,44 @@ docker-compose down -v
 - 应用地址: http://localhost:8080
 - Swagger UI: http://localhost:8080/swagger-ui.html
 - Actuator: http://localhost:8080/actuator
-- Prometheus Metrics: http://localhost:8080/actuator/prometheus
+- Prometheus Metrics: http://localhost:8080/actuator/prometheus（需要管理员 Bearer Token）
+
+## 运行测试
+
+先启动本机 MySQL 和 Redis，再执行测试，不必额外导出环境变量：
+
+```bash
+docker compose up -d mysql redis
+mvn -B -o clean test
+```
+
+不使用离线模式时可以去掉 `-o`：`mvn -B clean test`。
+
+`src/test/resources/config/application-test.yml` 只覆盖测试 profile 的连接信息，默认指向：
+
+- MySQL：`127.0.0.1:3306`，数据库 `sentinel`，用户名 `root`，密码 `root`（`useSSL=false`）
+- Redis：`127.0.0.1:6379`，无密码
+- 日志文件：`target/logs/sentinel-test.log`
+
+可用环境变量覆盖：`DB_HOST`、`DB_PORT`、`DB_NAME`、`DB_USERNAME`、`DB_PASSWORD`、`REDIS_HOST`、`REDIS_PORT`、`REDIS_PASSWORD`、`JWT_SECRET`。未设置 `JWT_SECRET` 时，测试使用配置中内置的、长度不少于 32 的测试密钥。
+
+数据库集成测试在事务结束后回滚，重复运行不会在 `t_task` 留下新行。
+
+## 冒烟测试
+
+应用起来之后，在仓库根目录执行：
+
+```bash
+BASE_URL=http://localhost:8080 bash scripts/smoke-test.sh
+```
+
+`BASE_URL` 默认是 `http://localhost:8080`。本机 8080 已被占用时，用 `--server.port=18080` 启动，再执行：
+
+```bash
+BASE_URL=http://localhost:18080 bash scripts/smoke-test.sh
+```
+
+脚本使用 `curl`。本机有 `jq` 时用它读取令牌和任务字段，没有则退回 `grep`。健康检查、未登录拒绝、管理员登录、创建/查询/取消任务、非法创建返回 400、登出后旧令牌失效、刷新令牌不能访问受保护接口，任一步失败会打印 `FAIL` 并以非 0 退出。任务编码每次运行唯一，可以重复执行。
 
 ## 项目结构
 

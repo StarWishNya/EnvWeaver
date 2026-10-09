@@ -24,6 +24,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -101,7 +102,9 @@ public class AuthControllerTest {
                 .with(csrf())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.data.username").value("用户名不能为空"));
 
         verify(authService, never()).login(any(LoginRequest.class));
     }
@@ -158,7 +161,7 @@ public class AuthControllerTest {
                 .with(csrf())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value(1007));
 
         verify(authService, times(1)).login(any(LoginRequest.class));
@@ -180,7 +183,7 @@ public class AuthControllerTest {
                 .with(csrf())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value(1005))
                 .andExpect(jsonPath("$.message").value("账户已被锁定"));
 
@@ -207,14 +210,26 @@ public class AuthControllerTest {
     }
 
     @Test
+    @DisplayName("登出头没有 Bearer 前缀时原样传递 Token")
+    public void shouldPassRawToken_whenAuthorizationHasNoBearerPrefix() throws Exception {
+        doNothing().when(authService).logout(anyString());
+
+        mockMvc.perform(post("/api/auth/logout")
+                .with(csrf())
+                .header("Authorization", "raw-token-without-prefix"))
+                .andExpect(status().isOk());
+
+        verify(authService, times(1)).logout("raw-token-without-prefix");
+    }
+
+    @Test
     @DisplayName("测试登出失败 - 缺少Authorization头")
     public void shouldReturnBadRequest_whenAuthorizationHeaderMissing() throws Exception {
-        // When & Then
-        // 注意：当前返回 500，因为 GlobalExceptionHandler 没有处理 MissingRequestHeaderException
-        // TODO: 添加对 MissingRequestHeaderException 的处理，返回 400
         mockMvc.perform(post("/api/auth/logout")
                 .with(csrf()))
-                .andExpect(status().isInternalServerError());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value("请求参数错误"));
 
         verify(authService, never()).logout(anyString());
     }
@@ -222,14 +237,13 @@ public class AuthControllerTest {
     @Test
     @DisplayName("测试登录请求格式错误")
     public void shouldReturnBadRequest_whenInvalidJsonFormat() throws Exception {
-        // When & Then
-        // 注意：当前返回 500，因为 GlobalExceptionHandler 没有处理 HttpMessageNotReadableException
-        // TODO: 添加对 HttpMessageNotReadableException 的处理，返回 400
         mockMvc.perform(post("/api/auth/login")
                 .with(csrf())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{invalid json}"))
-                .andExpect(status().isInternalServerError());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value("请求体格式错误"));
 
         verify(authService, never()).login(any(LoginRequest.class));
     }
@@ -242,14 +256,22 @@ public class AuthControllerTest {
         request.setUsername("testuser");
         request.setPassword("testpass");
 
-        // When & Then
-        // 注意：当前返回 500，因为 GlobalExceptionHandler 没有处理 HttpMediaTypeNotSupportedException
-        // TODO: 添加对 HttpMediaTypeNotSupportedException 的处理，返回 415
         mockMvc.perform(post("/api/auth/login")
                 .with(csrf())
                 .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isInternalServerError());
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value("不支持的 Content-Type"));
 
         verify(authService, never()).login(any(LoginRequest.class));
+    }
+
+    @Test
+    @DisplayName("登录接口不接受 GET")
+    public void shouldReturnMethodNotAllowed_whenLoginUsesGet() throws Exception {
+        mockMvc.perform(get("/api/auth/login"))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(jsonPath("$.code").value(5007))
+                .andExpect(jsonPath("$.message").value("不支持的请求方法"));
     }
 }

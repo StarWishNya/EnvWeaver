@@ -379,4 +379,46 @@ public class JwtUtilTest {
         assertThat(refreshClaims.getExpiration().getTime())
             .isGreaterThan(accessClaims.getExpiration().getTime());
     }
+
+    @Test
+    @DisplayName("访问令牌带 typ=access，刷新令牌带 typ=refresh 且不能当访问令牌")
+    public void shouldDistinguishAccessAndRefreshByTypeClaim() {
+        String accessToken = jwtUtil.generateToken("testuser", "USER");
+        String refreshToken = jwtUtil.generateRefreshToken("testuser");
+
+        assertThat(jwtUtil.getTokenType(accessToken)).isEqualTo(JwtUtil.TOKEN_TYPE_ACCESS);
+        assertThat(jwtUtil.isAccessToken(accessToken)).isTrue();
+        assertThat(jwtUtil.validateToken(refreshToken)).isTrue();
+        assertThat(jwtUtil.getTokenType(refreshToken)).isEqualTo(JwtUtil.TOKEN_TYPE_REFRESH);
+        assertThat(jwtUtil.isAccessToken(refreshToken)).isFalse();
+    }
+
+    @Test
+    @DisplayName("缺少 typ 或令牌非法时不是访问令牌")
+    public void shouldRejectTokenWithoutAccessType() {
+        SecretKey key = Keys.hmacShaKeyFor(TEST_SECRET.getBytes(StandardCharsets.UTF_8));
+        String untyped = Jwts.builder()
+                .subject("testuser")
+                .claim("role", "ADMIN")
+                .issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + TEST_EXPIRATION))
+                .signWith(key)
+                .compact();
+
+        assertThat(jwtUtil.validateToken(untyped)).isTrue();
+        assertThat(jwtUtil.getTokenType(untyped)).isNull();
+        assertThat(jwtUtil.isAccessToken(untyped)).isFalse();
+        assertThat(jwtUtil.isAccessToken("not-a-token")).isFalse();
+        assertThat(jwtUtil.getRemainingValiditySeconds("not-a-token")).isZero();
+    }
+
+    @Test
+    @DisplayName("剩余有效期跟随令牌过期时间而不是固定黑名单 TTL")
+    public void shouldReportRemainingValidityFromTokenExpiration() {
+        String token = jwtUtil.generateToken("testuser", "USER");
+        long seconds = jwtUtil.getRemainingValiditySeconds(token);
+        long expected = TEST_EXPIRATION / 1000;
+
+        assertThat(seconds).isBetween(expected - 2, expected);
+    }
 }

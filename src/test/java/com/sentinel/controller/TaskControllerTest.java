@@ -7,6 +7,8 @@ import com.sentinel.domain.Task;
 import com.sentinel.dto.CreateTaskRequest;
 import com.sentinel.config.BusinessException;
 import com.sentinel.config.GlobalExceptionHandler;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
 import com.sentinel.service.TaskService;
 import com.sentinel.util.JwtUtil;
 import com.sentinel.config.JwtAuthenticationFilter;
@@ -148,7 +150,7 @@ public class TaskControllerTest {
         // When & Then
         mockMvc.perform(get("/api/tasks/{taskId}", taskId)
                 .with(csrf()))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(2001))
                 .andExpect(jsonPath("$.message").value("任务不存在"));
 
@@ -356,5 +358,108 @@ public class TaskControllerTest {
                 .andExpect(jsonPath("$.data.testType").isString())
                 .andExpect(jsonPath("$.data.status").isString())
                 .andExpect(jsonPath("$.data.priority").isNumber());
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("非法分页参数返回 400")
+    public void shouldRejectNonPositivePagination() throws Exception {
+        mockMvc.perform(get("/api/tasks")
+                        .with(csrf())
+                        .param("pageNum", "-1")
+                        .param("pageSize", "10"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value("分页参数不合法"));
+
+        verify(taskService, never()).listTasks(anyInt(), anyInt(), nullable(String.class));
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("任务 ID 不是数字时返回 400")
+    public void shouldReturnBadRequest_whenTaskIdIsNotNumeric() throws Exception {
+        mockMvc.perform(get("/api/tasks/{taskId}", "abc").with(csrf()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value("请求参数错误"));
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("不支持的方法返回 405")
+    public void shouldReturnMethodNotAllowed_whenDeleteTask() throws Exception {
+        mockMvc.perform(delete("/api/tasks/{taskId}", 1L).with(csrf()))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(jsonPath("$.code").value(5007))
+                .andExpect(jsonPath("$.message").value("不支持的请求方法"));
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("更新状态缺少 status 参数返回 400")
+    public void shouldReturnBadRequest_whenStatusParamMissing() throws Exception {
+        mockMvc.perform(put("/api/tasks/{taskId}/status", 1L).with(csrf()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value("请求参数错误"));
+
+        verify(taskService, never()).updateTaskStatus(anyLong(), anyString());
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("重复任务编码返回 400")
+    public void shouldReturnBadRequest_whenTaskCodeDuplicated() throws Exception {
+        when(taskService.createTask(any())).thenThrow(new DuplicateKeyException("dup"));
+        CreateTaskRequest request = CreateTaskRequestBuilder.aCreateTaskRequest().build();
+
+        mockMvc.perform(post("/api/tasks")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5006))
+                .andExpect(jsonPath("$.message").value("资源已存在"));
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("数据约束失败返回 400 且不暴露 SQL")
+    public void shouldReturnBadRequest_whenDataIntegrityViolated() throws Exception {
+        when(taskService.createTask(any())).thenThrow(new DataIntegrityViolationException("bad sql"));
+        CreateTaskRequest request = CreateTaskRequestBuilder.aCreateTaskRequest().build();
+
+        mockMvc.perform(post("/api/tasks")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value("请求数据不符合约束"))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("sql"))));
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("超长编码、非法类型或越界优先级返回 400")
+    public void shouldRejectOversizedOrIllegalCreateFields() throws Exception {
+        CreateTaskRequest request = CreateTaskRequestBuilder.aCreateTaskRequest()
+                .withTaskCode("T".repeat(65))
+                .withTestType("WEIRD")
+                .withPriority(0)
+                .build();
+
+        mockMvc.perform(post("/api/tasks")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.data.taskCode").value("任务编码长度不能超过64"))
+                .andExpect(jsonPath("$.data.testType").value("测试类型不合法"))
+                .andExpect(jsonPath("$.data.priority").value("优先级必须在1到10之间"));
+
+        verify(taskService, never()).createTask(any());
     }
 }

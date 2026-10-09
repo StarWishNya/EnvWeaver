@@ -24,4 +24,13 @@ public interface ContainerMapper extends BaseMapper<Container> {
      */
     @Select("SELECT * FROM t_container WHERE environment_id = #{environmentId}")
     List<Container> findByEnvironmentId(@Param("environmentId") Long environmentId);
+
+    /**
+     * 根据 Docker 容器 ID 查询容器记录
+     * 
+     * @param containerId Docker 容器 ID
+     * @return 容器记录，不存在时返回 null
+     */
+    @Select("SELECT * FROM t_container WHERE container_id = #{containerId} LIMIT 1")
+    Container findByContainerId(@Param("containerId") String containerId);
 }

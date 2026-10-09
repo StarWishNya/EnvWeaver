@@ -44,8 +44,19 @@ public class AuthController {
     @PostMapping("/logout")
     @Operation(summary = "用户登出", description = "登出系统，Token 将被加入黑名单")
     public ApiResponse<Void> logout(@RequestHeader("Authorization") String authorization) {
-        String token = authorization.substring(7); // 移除 "Bearer " 前缀
+        String token = extractRawToken(authorization);
         authService.logout(token);
         return ApiResponse.success("登出成功", null);
+    }
+
+    /**
+     * 去掉 Authorization 头中的 "Bearer " 前缀，得到原始 Token。
+     * 没有该前缀时原样返回，避免 substring 截断令牌。
+     */
+    private String extractRawToken(String authorization) {
+        if (authorization != null && authorization.startsWith("Bearer ")) {
+            return authorization.substring("Bearer ".length()).trim();
+        }
+        return authorization == null ? null : authorization.trim();
     }
 }
