@@ -92,34 +92,44 @@ cache:
 # AI 服务配置
 # ============================================================================
 ai:
-  # AI 提供商类型（ollama/openai/custom）
-  provider: ${AI_PROVIDER:ollama}
-  
-  # Ollama 配置（本地 AI 服务）
-  ollama:
-    base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
-    model: ${OLLAMA_MODEL:qwen2.5:7b}
-    timeout: ${OLLAMA_TIMEOUT:120}
-    stream: false
-    temperature: 0.7
-  
-  # OpenAI 配置（云端 AI 服务）
-  openai:
-    base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
-    api-key: ${OPENAI_API_KEY:}
-    model: ${OPENAI_MODEL:gpt-3.5-turbo}
-    timeout: ${OPENAI_TIMEOUT:60}
-    max-tokens: 2000
-    temperature: 0.7
-  
-  # 自定义 AI 配置（OpenAI 兼容 API）
-  custom:
-    base-url: ${CUSTOM_AI_BASE_URL:}
-    api-key: ${CUSTOM_AI_API_KEY:}
-    model: ${CUSTOM_AI_MODEL:}
-    timeout: ${CUSTOM_AI_TIMEOUT:60}
-    max-tokens: 2000
-    temperature: 0.7
+  # 逗号分隔，前者优先。未设置 AI_PROVIDER_ORDER 时回退到旧的 AI_PROVIDER。
+  provider-order: ${AI_PROVIDER_ORDER:${AI_PROVIDER:ollama}}
+
+  # 每个提供商还可选 timeout（秒，默认 60）、max-tokens（默认 2000）、temperature（默认 0.3）、enabled（默认 true）
+  providers:
+    ollama:
+      protocol: ollama
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+      model: ${OLLAMA_MODEL:qwen2.5:7b}
+      timeout: ${OLLAMA_TIMEOUT:120}
+    openai:
+      protocol: openai
+      base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
+      api-key: ${OPENAI_API_KEY:}
+      model: ${OPENAI_MODEL:gpt-4o-mini}
+    anthropic:
+      protocol: anthropic
+      base-url: ${ANTHROPIC_BASE_URL:https://api.anthropic.com}
+      api-key: ${ANTHROPIC_API_KEY:}
+      model: ${ANTHROPIC_MODEL:claude-sonnet-4-5}
+    deepseek:
+      protocol: openai
+      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+      api-key: ${DEEPSEEK_API_KEY:}
+      model: ${DEEPSEEK_MODEL:deepseek-flash}
+      # deepseek-flash 会先推理。默认关掉，避免思考占满 max-tokens 后正文为空。
+      thinking: ${DEEPSEEK_THINKING:disabled}
+    deepseek-anthropic:
+      protocol: anthropic
+      base-url: https://api.deepseek.com/anthropic
+      api-key: ${DEEPSEEK_API_KEY:}
+      model: ${DEEPSEEK_MODEL:deepseek-flash}
+      thinking: ${DEEPSEEK_THINKING:disabled}
+    custom:
+      protocol: ${CUSTOM_AI_PROTOCOL:openai}
+      base-url: ${CUSTOM_AI_BASE_URL:}
+      api-key: ${CUSTOM_AI_API_KEY:}
+      model: ${CUSTOM_AI_MODEL:}
 
 # ============================================================================
 # Docker 配置

@@ -73,18 +73,14 @@ cache:
   token-blacklist-ttl: 43200  # 12小时
   key-prefix: "sentinel:test:"
 
-# AI 配置（测试环境 - 可使用 OpenAI 或本地）
+# AI 配置（测试环境 - 默认本地 Ollama，可用 AI_PROVIDER_ORDER 覆盖）
 ai:
-  provider: ${AI_PROVIDER:ollama}
-  ollama:
-    base-url: ${OLLAMA_BASE_URL:http://test-ollama:11434}
-    model: ${OLLAMA_MODEL:qwen2.5:7b}
-    timeout: 120
-  openai:
-    base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
-    api-key: ${OPENAI_API_KEY}
-    model: ${OPENAI_MODEL:gpt-3.5-turbo}
-    timeout: 60
+  provider-order: ${AI_PROVIDER_ORDER:${AI_PROVIDER:ollama}}
+  providers:
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://test-ollama:11434}
+      model: ${OLLAMA_MODEL:qwen2.5:7b}
+      timeout: 120
 
 # Docker 配置（测试环境）
 docker:

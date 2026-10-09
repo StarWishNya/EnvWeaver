@@ -84,24 +84,17 @@ cache:
   token-blacklist-ttl: ${CACHE_TOKEN_BLACKLIST_TTL:86400}  # 默认1天
   key-prefix: ${CACHE_KEY_PREFIX:sentinel:prod:}
 
-# AI 配置（生产环境 - 推荐使用 OpenAI）
+# AI 配置（生产环境 - 默认 OpenAI，可用 AI_PROVIDER_ORDER 覆盖）
 ai:
-  provider: ${AI_PROVIDER:openai}
-  ollama:
-    base-url: ${OLLAMA_BASE_URL:http://ollama-service:11434}
-    model: ${OLLAMA_MODEL:qwen2.5:7b}
-    timeout: ${OLLAMA_TIMEOUT:120}
-  openai:
-    base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
-    api-key: ${OPENAI_API_KEY}
-    model: ${OPENAI_MODEL:gpt-4}
-    timeout: ${OPENAI_TIMEOUT:60}
-    max-tokens: ${OPENAI_MAX_TOKENS:2000}
-  custom:
-    base-url: ${CUSTOM_AI_BASE_URL}
-    api-key: ${CUSTOM_AI_API_KEY}
-    model: ${CUSTOM_AI_MODEL}
-    timeout: ${CUSTOM_AI_TIMEOUT:60}
+  provider-order: ${AI_PROVIDER_ORDER:${AI_PROVIDER:openai}}
+  providers:
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://ollama-service:11434}
+      model: ${OLLAMA_MODEL:qwen2.5:7b}
+      timeout: ${OLLAMA_TIMEOUT:120}
+    openai:
+      timeout: ${OPENAI_TIMEOUT:60}
+      max-tokens: ${OPENAI_MAX_TOKENS:2000}
 
 # Docker 配置（生产环境）
 docker:

@@ -36,12 +36,15 @@ public class DiagnosisCache {
     private String rootCause;
 
     /**
-     * 可能原因列表 JSON
+     * 诊断元数据 JSON。
+     * 写入对象：errorType、severity、summary、confidence、provider、model。
+     * confidence 缺失时写 JSON null，不写 0。
+     * 读取时也接受数组 [errorType, severity, summary, confidence]。
      */
     private String possibleReasons;
 
     /**
-     * 解决方案列表 JSON
+     * 修复建议 JSON 数组，对应诊断结果的 suggestions。
      */
     private String solutions;
 

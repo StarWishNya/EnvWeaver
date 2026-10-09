@@ -8,7 +8,7 @@
 - **持久层**: MyBatis-Plus 3.5+ + MySQL 8.0
 - **缓存**: Spring Data Redis + Redis 7.0
 - **容器管理**: Docker Java Client
-- **AI 集成**: 支持本地 Ollama API 或 OpenAI 兼容 API
+- **AI 集成**: OpenAI 兼容、Anthropic 兼容与 Ollama，按 `AI_PROVIDER_ORDER` 依次回退
 - **安全**: Spring Security + JWT
 - **监控**: Spring Boot Actuator + Prometheus
 
@@ -38,8 +38,9 @@ DB_PASSWORD=root
 # JWT 密钥（至少 32 个字符，必填）
 JWT_SECRET=your-super-secret-jwt-key-change-in-production
 
-# AI 服务配置（可选）
-AI_PROVIDER=ollama  # 可选: ollama, openai, custom
+# AI 服务配置（可选）。DeepSeek 优先、本地 Ollama 兜底：
+AI_PROVIDER_ORDER=deepseek,ollama
+DEEPSEEK_API_KEY=your_deepseek_api_key
 ```
 
 > 📖 **配置说明**: 查看 [配置文档](docs/CONFIGURATION.md) 了解所有配置项
@@ -136,6 +137,8 @@ mvn -B -o clean test
 
 数据库集成测试在事务结束后回滚，重复运行不会在 `t_task` 留下新行。
 
+默认测试排除 `@Tag("live")` 的在线用例。只跑 DeepSeek 在线协议测试（需要 `DEEPSEEK_API_KEY`，也可写在仓库根 `.env`）见下方 [AI 服务](#ai-服务)。
+
 ## 冒烟测试
 
 应用起来之后，在仓库根目录执行：
@@ -157,6 +160,7 @@ BASE_URL=http://localhost:18080 bash scripts/smoke-test.sh
 ```
 src/main/java/com/sentinel/
 ├── agent/          # 智能体核心模块
+├── ai/             # 多提供商 AI 客户端与路由
 ├── config/         # 配置类
 ├── controller/     # 控制器层
 ├── domain/         # 领域模型
@@ -167,6 +171,69 @@ src/main/java/com/sentinel/
 ├── service/        # 业务服务层
 └── util/           # 工具类
 ```
+
+## AI 服务
+
+诊断按 `AI_PROVIDER_ORDER` 里的名字依次调用（逗号分隔，前者优先）。没配好 base-url / api-key 的项会跳过，调用失败会试下一个。没设置 `AI_PROVIDER_ORDER` 时，仍可读旧的单个 `AI_PROVIDER`。
+
+三种协议：
+
+- `openai`：OpenAI 兼容，`POST {base-url}/chat/completions`，`Authorization: Bearer`
+- `anthropic`：Anthropic 兼容，`POST {base-url}/v1/messages`，请求头 `x-api-key` 与 `anthropic-version`
+- `ollama`：`POST {base-url}/api/chat`（只需 base-url）
+
+DeepSeek 同时提供这两种云端协议，本地 Ollama 可以兜底：
+
+```bash
+AI_PROVIDER_ORDER=deepseek,ollama
+DEEPSEEK_API_KEY=your_deepseek_api_key
+DEEPSEEK_MODEL=deepseek-flash
+```
+
+`deepseek` 走 OpenAI 协议（`https://api.deepseek.com`），`deepseek-anthropic` 走 Anthropic 协议（`https://api.deepseek.com/anthropic`）。要改用后者，把 `deepseek-anthropic` 写进 `AI_PROVIDER_ORDER`。
+
+新增一个 OpenAI 或 Anthropic 兼容提供商：在 `application.yml` 的 `ai.providers` 下加一项，写上 `protocol`、`base-url`、`api-key`、`model`，再把这个名字放进 `AI_PROVIDER_ORDER`。每个提供商还可以设 `timeout`（秒，默认 60）、`max-tokens`（默认 2000）、`temperature`（默认 0.3）和 `enabled`（默认 true）。
+
+`thinking` 可选，取值 `disabled`、`enabled`，或不写（`unset`）。不写时请求里不带该字段，避免官方 OpenAI 拒绝未知参数。`disabled` 时 OpenAI / Anthropic 发送 `"thinking":{"type":"disabled"}`，Ollama 发送 `"think": false`。`enabled` 时前两者发送 `{"type":"enabled"}`；Anthropic 还要求 `budget_tokens` 小于 `max_tokens`，只在 max-tokens 大于 1024 时附带 `max(1024, maxTokens/2)`，否则不发送 thinking。Ollama 的 `enabled` 是 `"think": true`。`deepseek` 和 `deepseek-anthropic` 默认 `thinking: ${DEEPSEEK_THINKING:disabled}`，因为 `deepseek-flash` 会先推理，思考占满 max-tokens 时正文会是空的。空正文（OpenAI 的空白 `content`、Anthropic 只有 thinking 块、Ollama 空白 `content`）算调用失败，路由会试下一个提供商。
+
+部分「coding plan / 编程套餐」只允许指定的编程工具调用，不能当作通用 API。接入前请核对提供商条款。
+
+健康检查 `/actuator/health` 的 `ai` 组件只报告每个提供商是否已配置、模型名和协议，不带密钥，也不在每次检查时访问模型服务。一个都没配好时该项是 `UNKNOWN`，不会把整体健康打成 `DOWN`。
+
+默认 `mvn test` 排除 `@Tag("live")`。只跑 DeepSeek 在线测试（读环境变量 `DEEPSEEK_API_KEY`，没有则解析仓库根 `.env`）：
+
+```bash
+mvn -B -o test -Dgroups=live -Dsurefire.excludedGroups=
+```
+
+## AI 诊断
+
+诊断接口需要登录。`POST /api/diagnosis/{taskId}` 在任务不存在时返回 HTTP 404，业务码 `2001`。还没有请求过诊断时，`GET /api/diagnosis/{taskId}` 返回 HTTP 404，业务码 `4002`。
+
+请求诊断（`log` 可省略；`forceRefresh` 默认 false）：
+
+```bash
+curl -X POST "$BASE/api/diagnosis/$TASK_ID" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"forceRefresh":false,"log":"可选，直接诊断这段日志"}'
+```
+
+省略 `log` 时，输入是任务的 `errorMessage`，再加上该任务环境里每个容器的尾部 200 行日志。Docker 读取失败会跳过该容器。两处都没有文本时返回 HTTP 400。响应是 HTTP 202，`data` 只有 `diagnosisId` 和 `status`（`PENDING`、`PROCESSING` 或 `COMPLETED`）。相同日志（MD5）且没有强制刷新时，`status` 直接是 `COMPLETED`，外层 `fromCache` 为 true。模型调用在诊断专用有界线程池里执行。
+
+`GET /api/diagnosis/{taskId}` 的 `data` 包含 `id`、`taskId`、`errorType`、`severity`、`summary`、`rootCause`、`suggestions`、`confidence`、`fromCache`，以及 `status`、`provider`、`model`。失败时 `status` 为 `FAILED`，并带 `error`。`data.fromCache` 与响应体外层的 `fromCache` 是同一个值。
+
+`errorType` 为 `RESOURCE_EXHAUSTED`、`NETWORK_ERROR`、`DEPENDENCY_FAILURE`、`TIMEOUT`、`CONFIG_ERROR`、`UNKNOWN`。`severity` 为 `LOW`、`MEDIUM`、`HIGH`、`CRITICAL`。非法值分别落到 `UNKNOWN` 和 `MEDIUM`，`confidence` 钳制到 0 到 1。模型被要求只返回这个 JSON（中文文本）。解析失败时 `summary` 取原文前 200 字，`rootCause` 取截断后的原文，`errorType` 为 `UNKNOWN`。
+
+相同日志的结果写在 `t_diagnosis_cache`。`root_cause` 截断到 500 字；`solutions` 是建议字符串的 JSON 数组；`possible_reasons` 是对象 JSON：`errorType`、`severity`、`summary`、`confidence`、`provider`、`model`。每个任务的进行状态在 Redis，TTL 为 `cache.diagnosis-ttl`。
+
+对已启动的应用（例如 `AI_PROVIDER_ORDER=deepseek,ollama`）：
+
+```bash
+BASE_URL=http://localhost:8080 bash scripts/ai-smoke-test.sh
+```
+
+脚本用 `admin` / `admin123` 登录，创建唯一任务，提交一段 MySQL `3306` 连接被拒绝、随后 `ApplicationContext` 启动失败的 Spring 日志，并在 90 秒内轮询到 `COMPLETED`。
 
 ## 配置说明
 

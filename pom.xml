@@ -31,6 +31,8 @@
         <testcontainers.version>1.19.3</testcontainers.version>
         <embedded-redis.version>0.7.3</embedded-redis.version>
         <wiremock.version>3.3.1</wiremock.version>
+        <!-- 默认排除 @Tag("live")。在线测试：mvn -B -o test -Dgroups=live -Dsurefire.excludedGroups= -->
+        <surefire.excludedGroups>live</surefire.excludedGroups>
     </properties>
 
     <dependencies>
@@ -305,6 +307,7 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.3</version>
                 <configuration>
+                    <excludedGroups>${surefire.excludedGroups}</excludedGroups>
                     <includes>
                         <include>**/*Test.java</include>
                         <include>**/*Tests.java</include>

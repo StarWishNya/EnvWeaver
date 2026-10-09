@@ -78,13 +78,12 @@ cache:
 
 # AI 配置（开发环境 - 使用本地 Ollama）
 ai:
-  provider: ollama
-  ollama:
-    base-url: http://localhost:11434
-    model: qwen2.5:7b
-    timeout: 120
-    stream: false
-    temperature: 0.7
+  provider-order: ${AI_PROVIDER_ORDER:${AI_PROVIDER:ollama}}
+  providers:
+    ollama:
+      base-url: http://localhost:11434
+      model: qwen2.5:7b
+      timeout: 120
 
 # Docker 配置（开发环境）
 docker:

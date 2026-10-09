@@ -43,7 +43,7 @@ curl -sS -X POST "$BASE/api/auth/login" -H 'Content-Type: application/json' \
 | U03 | medium | `/actuator/prometheus` 无需认证 | 已修复（第二轮） |
 | U04 | low | `pageSize` 大于 500 被静默截成 500 | 未修复 |
 | U05 | low | 启动时 Thymeleaf 找不到模板目录 | 未修复 |
-| U06 | low | `SecurityProperties.whitelistPaths` 没有被使用 | 未修复 |
+| U06 | low | `SecurityProperties.whitelistPaths` 没有被使用 | 已修复 |
 | U07 | low | `/api/health` 不检查 MySQL / Redis | 未修复 |
 
 ### D01 坏输入返回 500
@@ -256,7 +256,7 @@ curl -sS "$BASE/api/tasks?pageNum=1&pageSize=1000000" -H "Authorization: Bearer 
 ### U06 白名单配置是死的
 
 `SecurityProperties.whitelistPaths` 含 `/api/auth/**`，但 `SecurityConfig` 只用自己的 `requestMatchers`。若改成使用这份清单，登出会变成匿名。  
-未修复: 两份清单不一致，不能直接切换。
+已修复: `whitelistPaths` 字段已删除，不再存在未接入的白名单配置。
 
 ### U07 `/api/health` 恒为 UP
 
@@ -279,8 +279,8 @@ curl -sS "$BASE/api/health"
 - `POST /api/environments/{envId}/release`
 - `GET /api/metrics`
 - `GET /api/metrics/health`（另有 `GET /api/health` 与 `GET /actuator/health`）
-- `GET /api/diagnosis/{taskId}`
-- `POST /api/diagnosis/{taskId}`
+
+`GET /api/diagnosis/{taskId}` 与 `POST /api/diagnosis/{taskId}` 现已实现。
 
 已实现但与文档字段不一致、本次未改契约：创建任务实际是 HTTP 200 而不是 201；列表参数是 `pageNum` / `pageSize`，数据在 `data.records`，不是 `page` / `size` 和 `data.content`；取消任务是 `POST /api/tasks/{id}/cancel`，不是 `DELETE /api/tasks/{id}`。
 
