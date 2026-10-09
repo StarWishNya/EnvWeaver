@@ -270,8 +270,10 @@ public class JwtUtilTest {
         String role = "USER";
         String token = jwtUtil.generateToken(username, role);
         
-        // 篡改Token（修改最后一个字符）
-        String tamperedToken = token.substring(0, token.length() - 1) + "X";
+        // 篡改签名中间的字符。末位 base64 字符有未使用的位，改它可能解码出相同签名
+        int at = token.lastIndexOf('.') + 10;
+        char replacement = token.charAt(at) == 'A' ? 'B' : 'A';
+        String tamperedToken = token.substring(0, at) + replacement + token.substring(at + 1);
 
         // When
         boolean isValid = jwtUtil.validateToken(tamperedToken);

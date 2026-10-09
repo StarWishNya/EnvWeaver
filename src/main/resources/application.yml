@@ -194,3 +194,51 @@ logging:
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
     file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+# ============================================================================
+# 任务生命周期
+# ============================================================================
+sentinel:
+  lifecycle:
+    # 创建任务后自动供给环境
+    auto-provision: true
+    # 任务失败后自动请求诊断
+    auto-diagnose: true
+    # 失败环境保留时间，供查看现场
+    failed-retention: 30m
+    # 补扫遗漏 PENDING 任务的间隔
+    pending-sweep-interval: 30s
+    # 过期环境回收间隔
+    reaper-interval: 60s
+  # 按任务依赖启动容器。未写到这里的依赖仍使用代码里的内置目录。
+  provisioning:
+    ttl: 2h
+    port-range: "30000-39999"
+    pull-missing: true
+    pull-timeout: 5m
+    ready-timeout: 90s
+    host: localhost
+    dependencies:
+      mysql:
+        image: mysql:8.0
+        port: 3306
+        env:
+          MYSQL_ROOT_PASSWORD: sentinel
+          MYSQL_DATABASE: test
+      redis:
+        image: redis:7-alpine
+        port: 6379
+      postgres:
+        image: postgres:16-alpine
+        port: 5432
+        env:
+          POSTGRES_PASSWORD: sentinel
+      mongodb:
+        image: mongo:7
+        port: 27017
+      rabbitmq:
+        image: rabbitmq:3-management-alpine
+        port: 5672
+      nginx:
+        image: nginx:alpine
+        port: 80

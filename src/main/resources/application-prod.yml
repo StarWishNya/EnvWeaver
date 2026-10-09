@@ -144,3 +144,45 @@ management:
   endpoint:
     health:
       show-details: when-authorized
+
+# ============================================================================
+# 任务生命周期（生产环境）
+# ============================================================================
+sentinel:
+  lifecycle:
+    auto-provision: true
+    auto-diagnose: true
+    failed-retention: 30m
+    pending-sweep-interval: 30s
+    reaper-interval: 60s
+  provisioning:
+    ttl: ${SENTINEL_PROVISION_TTL:2h}
+    port-range: ${SENTINEL_PROVISION_PORT_RANGE:30000-39999}
+    pull-missing: ${SENTINEL_PROVISION_PULL_MISSING:true}
+    pull-timeout: ${SENTINEL_PROVISION_PULL_TIMEOUT:5m}
+    ready-timeout: ${SENTINEL_PROVISION_READY_TIMEOUT:90s}
+    host: ${SENTINEL_PROVISION_HOST:localhost}
+    dependencies:
+      mysql:
+        image: mysql:8.0
+        port: 3306
+        env:
+          MYSQL_ROOT_PASSWORD: ${SENTINEL_MYSQL_ROOT_PASSWORD:sentinel}
+          MYSQL_DATABASE: test
+      redis:
+        image: redis:7-alpine
+        port: 6379
+      postgres:
+        image: postgres:16-alpine
+        port: 5432
+        env:
+          POSTGRES_PASSWORD: ${SENTINEL_POSTGRES_PASSWORD:sentinel}
+      mongodb:
+        image: mongo:7
+        port: 27017
+      rabbitmq:
+        image: rabbitmq:3-management-alpine
+        port: 5672
+      nginx:
+        image: nginx:alpine
+        port: 80

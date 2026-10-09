@@ -41,10 +41,10 @@ curl -sS -X POST "$BASE/api/auth/login" -H 'Content-Type: application/json' \
 | U01 | medium | 任务不存在是 HTTP 400 而不是 404 | 已修复（第二轮） |
 | U02 | medium | 密码错误和锁定是 HTTP 400 而不是 401 | 已修复（第二轮） |
 | U03 | medium | `/actuator/prometheus` 无需认证 | 已修复（第二轮） |
-| U04 | low | `pageSize` 大于 500 被静默截成 500 | 未修复 |
-| U05 | low | 启动时 Thymeleaf 找不到模板目录 | 未修复 |
+| U04 | low | `pageSize` 大于 500 被静默截成 500 | 已修复（第四轮：`size` 超过 500 返回 400） |
+| U05 | low | 启动时 Thymeleaf 找不到模板目录 | 已修复（第四轮：移除未使用的 Thymeleaf 依赖） |
 | U06 | low | `SecurityProperties.whitelistPaths` 没有被使用 | 已修复 |
-| U07 | low | `/api/health` 不检查 MySQL / Redis | 未修复 |
+| U07 | low | `/api/health` 不检查 MySQL / Redis | 已修复（第四轮：增加 `components`，db 或 redis 不可用时返回 503） |
 
 ### D01 坏输入返回 500
 
@@ -273,7 +273,7 @@ curl -sS "$BASE/api/health"
 
 补接口时发现一个此前存在的缺陷：Docker 客户端用的 httpclient5 传输层与 Spring Boot 管理的 httpclient5 5.2 不兼容，运行时先报 `NoClassDefFoundError`，补齐类后又把 unix socket 当成 `localhost:2375`。所有真实 Docker 调用（读容器日志、停止和删除容器）因此一直失败，单元测试全是 mock 所以没有暴露。已改用 docker-java 自带的 zerodep 传输，并用真实容器验证了日志读取与环境释放。
 
-已实现但与文档字段不一致、本次未改契约：创建任务实际是 HTTP 200 而不是 201；列表参数是 `pageNum` / `pageSize`，数据在 `data.records`，不是 `page` / `size` 和 `data.content`；取消任务是 `POST /api/tasks/{id}/cancel`，不是 `DELETE /api/tasks/{id}`。
+任务接口已按文档对齐（第四轮，经用户同意修改契约）：创建任务返回 HTTP 201；列表参数为 `page`（从 0 开始）/ `size`，数据在 `data.content`；取消任务为 `DELETE /api/tasks/{id}`，旧的 `POST /api/tasks/{id}/cancel` 暂时保留为兼容别名。上文复现步骤里的 `pageNum` / `pageSize` 是修复前的旧参数。
 
 ## 测试结果
 

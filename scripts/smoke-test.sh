@@ -89,7 +89,7 @@ AUTH=(-H "Authorization: Bearer ${ACCESS_TOKEN}" -H 'Content-Type: application/j
 # 4. Create a task
 request POST "${BASE_URL}/api/tasks" "${AUTH[@]}" \
   -d "{\"taskCode\":\"${TASK_CODE}\",\"serviceId\":\"${SERVICE_ID}\",\"testType\":\"UNIT_TEST\",\"priority\":5}"
-expect_http "POST /api/tasks" '^200$'
+expect_http "POST /api/tasks" '^201$'
 TASK_ID="$(json_get '.data.id' "$RESP_BODY")"
 CREATED_CODE="$(json_get '.data.taskCode' "$RESP_BODY")"
 if [[ -z "$TASK_ID" || "$TASK_ID" == "null" || "$CREATED_CODE" != "$TASK_CODE" ]]; then
@@ -103,14 +103,14 @@ request GET "${BASE_URL}/api/tasks/${TASK_ID}" -H "Authorization: Bearer ${ACCES
 expect_http "GET /api/tasks/${TASK_ID}" '^200$'
 GOT_CODE="$(json_get '.data.taskCode' "$RESP_BODY")"
 GOT_STATUS="$(json_get '.data.status' "$RESP_BODY")"
-if [[ "$GOT_CODE" != "$TASK_CODE" || "$GOT_STATUS" != "PENDING" ]]; then
+if [[ "$GOT_CODE" != "$TASK_CODE" || ! "$GOT_STATUS" =~ ^(PENDING|QUEUED|RUNNING)$ ]]; then
   printf '%s\n' "$RESP_BODY" >&2
-  fail "get task expected taskCode ${TASK_CODE} status PENDING"
+  fail "get task expected taskCode ${TASK_CODE} status PENDING, QUEUED or RUNNING"
 fi
-pass "get task by id returned PENDING ${TASK_CODE}"
+pass "get task by id returned ${GOT_STATUS} ${TASK_CODE}"
 
 # 6. List and find it
-request GET "${BASE_URL}/api/tasks?pageNum=1&pageSize=50" -H "Authorization: Bearer ${ACCESS_TOKEN}"
+request GET "${BASE_URL}/api/tasks?page=0&size=50" -H "Authorization: Bearer ${ACCESS_TOKEN}"
 expect_http "GET /api/tasks" '^200$'
 if printf '%s' "$RESP_BODY" | grep -q "\"taskCode\":\"${TASK_CODE}\""; then
   pass "list tasks contains ${TASK_CODE}"
@@ -120,8 +120,8 @@ else
 fi
 
 # 7. Cancel and confirm status
-request POST "${BASE_URL}/api/tasks/${TASK_ID}/cancel" -H "Authorization: Bearer ${ACCESS_TOKEN}"
-expect_http "POST /api/tasks/${TASK_ID}/cancel" '^200$'
+request DELETE "${BASE_URL}/api/tasks/${TASK_ID}" -H "Authorization: Bearer ${ACCESS_TOKEN}"
+expect_http "DELETE /api/tasks/${TASK_ID}" '^200$'
 request GET "${BASE_URL}/api/tasks/${TASK_ID}" -H "Authorization: Bearer ${ACCESS_TOKEN}"
 expect_http "GET cancelled task" '^200$'
 GOT_STATUS="$(json_get '.data.status' "$RESP_BODY")"

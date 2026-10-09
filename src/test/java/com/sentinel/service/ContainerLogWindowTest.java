@@ -98,4 +98,37 @@ class ContainerLogWindowTest {
 
         assertThat(filtered).isEqualTo("2026-10-09T08:00:00 same\n");
     }
+
+    @Test
+    @DisplayName("只去掉一层 Docker 时间戳前缀，正文里的时间戳保留")
+    void stripsOnlyDockerTimestampPrefix() {
+        String logs = """
+                2026-10-09T09:00:00.000000000Z plain
+                2026-10-09T09:00:00.000000000Z 2026-10-09T08:00:00Z original
+                2026-10-09T08:00:00 local-kept
+                just-a-timestamp
+                """;
+
+        assertThat(ContainerLogWindow.stripDockerTimestampPrefixes(logs)).isEqualTo("""
+                plain
+                2026-10-09T08:00:00Z original
+                2026-10-09T08:00:00 local-kept
+                just-a-timestamp
+                """);
+        assertThat(ContainerLogWindow.stripDockerTimestampPrefixes(null)).isEmpty();
+        assertThat(ContainerLogWindow.stripDockerTimestampPrefixes("")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("只有全部非空行都带 Docker 前缀时才认定为 Docker 时间戳")
+    void detectsUniformDockerPrefixes() {
+        assertThat(ContainerLogWindow.uniformDockerTimestampPrefixes(
+                "2026-10-09T09:00:00.000000000Z plain\n2026-10-09T09:00:01Z 2026-10-09T08:00:00Z original\n"))
+                .isTrue();
+        assertThat(ContainerLogWindow.uniformDockerTimestampPrefixes(
+                "2026-10-09T09:00:00.000000000Z plain\nplain\n")).isFalse();
+        assertThat(ContainerLogWindow.uniformDockerTimestampPrefixes("2026-10-09T08:00:00 local\n")).isFalse();
+        assertThat(ContainerLogWindow.uniformDockerTimestampPrefixes(null)).isFalse();
+        assertThat(ContainerLogWindow.uniformDockerTimestampPrefixes("")).isFalse();
+    }
 }

@@ -15,6 +15,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -163,6 +164,38 @@ class MetricsServiceTest {
         SystemMetrics.Disk noDisk = MetricsService.diskMetrics(-1, 5);
         assertThat(noDisk.getTotal()).isZero();
         assertThat(MetricsService.diskMetrics(100, 250).getUsed()).isZero();
+    }
+
+    @Test
+    @DisplayName("启动预热丢掉首次 CPU 0，无效读数回退到上一次非零样本")
+    void cpuPrimeKeepsLastNonZeroSample() {
+        AtomicInteger calls = new AtomicInteger();
+        HostMetrics host = scriptedCpu(calls, 0d, 0.5d, Double.NaN, -1d);
+        MetricsService service = service(host, mock(DockerClient.class), List.of(), Duration.ofSeconds(2));
+
+        assertThat(service.getSystemMetrics().getCpu().getUsage()).isEqualTo(50d);
+        assertThat(service.getSystemMetrics().getCpu().getCores()).isEqualTo(8);
+        assertThat(service.getSystemMetrics().getCpu().getUsage()).isEqualTo(50d);
+    }
+
+    @Test
+    @DisplayName("已有基线之后的 0 表示空闲")
+    void laterZeroCpuIsIdle() {
+        AtomicInteger calls = new AtomicInteger();
+        HostMetrics host = scriptedCpu(calls, 0.5d, 0d);
+        MetricsService service = service(host, mock(DockerClient.class), List.of(), Duration.ofSeconds(2));
+
+        assertThat(service.getSystemMetrics().getCpu().getUsage()).isZero();
+    }
+
+    @Test
+    @DisplayName("没有有效 CPU 样本时保持 -1")
+    void cpuStaysUnavailableWithoutSample() {
+        AtomicInteger calls = new AtomicInteger();
+        HostMetrics host = scriptedCpu(calls, -1d, Double.NaN);
+        MetricsService service = service(host, mock(DockerClient.class), List.of(), Duration.ofSeconds(2));
+
+        assertThat(service.getSystemMetrics().getCpu().getUsage()).isEqualTo(-1d);
     }
 
     @Test
@@ -344,6 +377,39 @@ class MetricsServiceTest {
             @Override
             public DiskSpace disk() {
                 return new DiskSpace(2000, 500);
+            }
+        };
+    }
+
+    private static HostMetrics scriptedCpu(AtomicInteger calls, double... samples) {
+        return new HostMetrics() {
+            @Override
+            public int availableProcessors() {
+                return 8;
+            }
+
+            @Override
+            public double systemCpuLoad() {
+                int index = calls.getAndIncrement();
+                if (index >= samples.length) {
+                    return samples[samples.length - 1];
+                }
+                return samples[index];
+            }
+
+            @Override
+            public long totalPhysicalMemory() {
+                return -1L;
+            }
+
+            @Override
+            public long freePhysicalMemory() {
+                return -1L;
+            }
+
+            @Override
+            public DiskSpace disk() {
+                return new DiskSpace(-1L, -1L);
             }
         };
     }

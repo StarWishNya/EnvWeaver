@@ -49,6 +49,12 @@ public class DockerProperties {
     private Integer responseTimeout = 60;
 
     /**
+     * 停止容器等待退出的秒数。超时后 Docker 发送 SIGKILL。
+     */
+    @Min(value = 0, message = "容器停止超时不能小于0秒")
+    private Integer stopTimeoutSeconds = 3;
+
+    /**
      * 容器配置
      */
     private ContainerConfig container = new ContainerConfig();

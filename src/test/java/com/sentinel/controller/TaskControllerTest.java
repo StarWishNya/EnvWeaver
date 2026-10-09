@@ -88,12 +88,14 @@ public class TaskControllerTest {
                 .with(csrf())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.code").value(200))
                 .andExpect(jsonPath("$.data.id").value(1))
                 .andExpect(jsonPath("$.data.taskCode").value("TEST-001"))
                 .andExpect(jsonPath("$.data.serviceId").value("user-service"))
-                .andExpect(jsonPath("$.data.status").value("PENDING"));
+                .andExpect(jsonPath("$.data.status").value("PENDING"))
+                .andExpect(jsonPath("$.data.dependencies").isArray())
+                .andExpect(jsonPath("$.data.dependencies[0]").value("mysql:8.0"));
 
         verify(taskService, times(1)).createTask(any(CreateTaskRequest.class));
     }
@@ -173,20 +175,23 @@ public class TaskControllerTest {
         page.setRecords(Arrays.asList(task1, task2));
         page.setTotal(2);
 
-        when(taskService.listTasks(1, 10, null)).thenReturn(page);
+        when(taskService.listTasks(0, 10, null, null)).thenReturn(page);
 
         // When & Then
         mockMvc.perform(get("/api/tasks")
                 .with(csrf())
-                .param("pageNum", "1")
-                .param("pageSize", "10"))
+                .param("page", "0")
+                .param("size", "10"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
-                .andExpect(jsonPath("$.data.records").isArray())
-                .andExpect(jsonPath("$.data.records.length()").value(2))
-                .andExpect(jsonPath("$.data.total").value(2));
+                .andExpect(jsonPath("$.data.content").isArray())
+                .andExpect(jsonPath("$.data.content.length()").value(2))
+                .andExpect(jsonPath("$.data.page").value(0))
+                .andExpect(jsonPath("$.data.size").value(10))
+                .andExpect(jsonPath("$.data.totalElements").value(2))
+                .andExpect(jsonPath("$.data.totalPages").value(1));
 
-        verify(taskService, times(1)).listTasks(1, 10, null);
+        verify(taskService, times(1)).listTasks(0, 10, null, null);
     }
 
     @Test
@@ -201,20 +206,22 @@ public class TaskControllerTest {
         page.setRecords(Arrays.asList(task1, task2));
         page.setTotal(2);
 
-        when(taskService.listTasks(1, 10, "RUNNING")).thenReturn(page);
+        when(taskService.listTasks(0, 10, "RUNNING", "INTEGRATION_TEST")).thenReturn(page);
 
         // When & Then
         mockMvc.perform(get("/api/tasks")
                 .with(csrf())
-                .param("pageNum", "1")
-                .param("pageSize", "10")
-                .param("status", "RUNNING"))
+                .param("page", "0")
+                .param("size", "10")
+                .param("status", "RUNNING")
+                .param("testType", "INTEGRATION_TEST"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
-                .andExpect(jsonPath("$.data.records").isArray())
-                .andExpect(jsonPath("$.data.total").value(2));
+                .andExpect(jsonPath("$.data.content").isArray())
+                .andExpect(jsonPath("$.data.totalElements").value(2))
+                .andExpect(jsonPath("$.data.content[0].status").value("RUNNING"));
 
-        verify(taskService, times(1)).listTasks(1, 10, "RUNNING");
+        verify(taskService, times(1)).listTasks(0, 10, "RUNNING", "INTEGRATION_TEST");
     }
 
     @Test
@@ -318,19 +325,24 @@ public class TaskControllerTest {
     @DisplayName("测试分页参数默认值")
     public void shouldUseDefaultPaginationParams_whenNotProvided() throws Exception {
         // Given
-        IPage<Task> page = new Page<>(1, 10);
+        IPage<Task> page = new Page<>(1, 20);
         page.setRecords(Arrays.asList());
         page.setTotal(0);
 
-        when(taskService.listTasks(1, 10, null)).thenReturn(page);
+        when(taskService.listTasks(0, 20, null, null)).thenReturn(page);
 
         // When & Then
         mockMvc.perform(get("/api/tasks")
                 .with(csrf()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value(200));
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.page").value(0))
+                .andExpect(jsonPath("$.data.size").value(20))
+                .andExpect(jsonPath("$.data.content").isArray())
+                .andExpect(jsonPath("$.data.totalElements").value(0))
+                .andExpect(jsonPath("$.data.totalPages").value(0));
 
-        verify(taskService, times(1)).listTasks(1, 10, null);
+        verify(taskService, times(1)).listTasks(0, 20, null, null);
     }
 
     @Test
@@ -361,7 +373,9 @@ public class TaskControllerTest {
                 .andExpect(jsonPath("$.data.serviceId").isString())
                 .andExpect(jsonPath("$.data.testType").isString())
                 .andExpect(jsonPath("$.data.status").isString())
-                .andExpect(jsonPath("$.data.priority").isNumber());
+                .andExpect(jsonPath("$.data.priority").isNumber())
+                .andExpect(jsonPath("$.data.dependencies").isArray())
+                .andExpect(jsonPath("$.data.updatedAt").doesNotExist());
     }
 
     @Test
@@ -370,13 +384,40 @@ public class TaskControllerTest {
     public void shouldRejectNonPositivePagination() throws Exception {
         mockMvc.perform(get("/api/tasks")
                         .with(csrf())
-                        .param("pageNum", "-1")
-                        .param("pageSize", "10"))
+                        .param("page", "-1")
+                        .param("size", "10"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(5004))
-                .andExpect(jsonPath("$.message").value("分页参数不合法"));
+                .andExpect(jsonPath("$.message").value(TaskService.PAGE_NEGATIVE_MESSAGE));
 
-        verify(taskService, never()).listTasks(anyInt(), anyInt(), nullable(String.class));
+        mockMvc.perform(get("/api/tasks")
+                        .with(csrf())
+                        .param("page", "0")
+                        .param("size", "0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value(TaskService.PAGE_SIZE_MESSAGE));
+
+        mockMvc.perform(get("/api/tasks")
+                        .with(csrf())
+                        .param("size", "501"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value(TaskService.PAGE_SIZE_MESSAGE));
+
+        mockMvc.perform(get("/api/tasks")
+                        .with(csrf())
+                        .param("status", "NOPE"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(TaskService.STATUS_FILTER_MESSAGE));
+
+        mockMvc.perform(get("/api/tasks")
+                        .with(csrf())
+                        .param("testType", "WEIRD"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(TaskService.TEST_TYPE_FILTER_MESSAGE));
+
+        verify(taskService, never()).listTasks(anyInt(), anyInt(), any(), any());
     }
 
     @Test
@@ -392,11 +433,51 @@ public class TaskControllerTest {
     @Test
     @WithMockUser
     @DisplayName("不支持的方法返回 405")
-    public void shouldReturnMethodNotAllowed_whenDeleteTask() throws Exception {
-        mockMvc.perform(delete("/api/tasks/{taskId}", 1L).with(csrf()))
+    public void shouldReturnMethodNotAllowed_whenPatchTask() throws Exception {
+        mockMvc.perform(patch("/api/tasks/{taskId}", 1L).with(csrf()))
                 .andExpect(status().isMethodNotAllowed())
                 .andExpect(jsonPath("$.code").value(5007))
                 .andExpect(jsonPath("$.message").value("不支持的请求方法"));
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("DELETE 取消任务成功")
+    public void shouldCancelTask_whenDelete() throws Exception {
+        doNothing().when(taskService).cancelTask(3L);
+
+        mockMvc.perform(delete("/api/tasks/{taskId}", 3L).with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.message").value("任务已取消"));
+
+        verify(taskService).cancelTask(3L);
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("DELETE 取消已结束任务返回 400")
+    public void shouldRejectDeleteWhenTaskFinished() throws Exception {
+        doThrow(new BusinessException(ErrorCode.OPERATION_NOT_ALLOWED, "任务已完成，无法取消"))
+                .when(taskService).cancelTask(3L);
+
+        mockMvc.perform(delete("/api/tasks/{taskId}", 3L).with(csrf()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5007))
+                .andExpect(jsonPath("$.message").value("任务已完成，无法取消"));
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("DELETE 取消不存在的任务返回 404")
+    public void shouldReturnNotFoundWhenDeleteMissingTask() throws Exception {
+        doThrow(new BusinessException(ErrorCode.TASK_NOT_FOUND))
+                .when(taskService).cancelTask(9L);
+
+        mockMvc.perform(delete("/api/tasks/{taskId}", 9L).with(csrf()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value(2001))
+                .andExpect(jsonPath("$.message").value("任务不存在"));
     }
 
     @Test

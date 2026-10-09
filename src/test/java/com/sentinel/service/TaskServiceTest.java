@@ -9,18 +9,24 @@ import com.sentinel.dto.CreateTaskRequest;
 import com.sentinel.dto.TaskLogsResponse;
 import com.sentinel.dto.TaskStatusResponse;
 import com.sentinel.enums.ErrorCode;
+import com.sentinel.event.TaskCreatedEvent;
+import com.sentinel.event.TaskStatusChangedEvent;
 import com.sentinel.mapper.TaskMapper;
 import com.sentinel.testutil.CreateTaskRequestBuilder;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
 import com.sentinel.testutil.TaskBuilder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -42,6 +48,9 @@ public class TaskServiceTest {
 
     @Mock
     private DockerService dockerService;
+
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks
     private TaskService taskService;
@@ -86,6 +95,7 @@ public class TaskServiceTest {
         assertThat(result.getStatus()).isEqualTo("PENDING");
         
         verify(taskMapper, times(1)).insert(any(Task.class));
+        verify(eventPublisher).publishEvent(new TaskCreatedEvent(1L));
     }
 
     @Test
@@ -143,17 +153,20 @@ public class TaskServiceTest {
         page.setRecords(Arrays.asList(task1, task2));
         page.setTotal(2);
 
-        when(taskMapper.selectTaskPage(any(Page.class), isNull())).thenReturn(page);
+        when(taskMapper.selectTaskPage(any(Page.class), isNull(), isNull())).thenReturn(page);
 
         // When
-        IPage<Task> result = taskService.listTasks(1, 10, null);
+        IPage<Task> result = taskService.listTasks(0, 10, null, null);
 
         // Then
         assertThat(result).isNotNull();
         assertThat(result.getRecords()).hasSize(2);
         assertThat(result.getTotal()).isEqualTo(2);
-        
-        verify(taskMapper, times(1)).selectTaskPage(any(Page.class), isNull());
+
+        ArgumentCaptor<Page<Task>> pageCaptor = ArgumentCaptor.forClass(Page.class);
+        verify(taskMapper).selectTaskPage(pageCaptor.capture(), isNull(), isNull());
+        assertThat(pageCaptor.getValue().getCurrent()).isEqualTo(1);
+        assertThat(pageCaptor.getValue().getSize()).isEqualTo(10);
     }
 
     @Test
@@ -167,17 +180,19 @@ public class TaskServiceTest {
         page.setRecords(Arrays.asList(task1, task2));
         page.setTotal(2);
 
-        when(taskMapper.selectTaskPage(any(Page.class), eq("RUNNING"))).thenReturn(page);
+        when(taskMapper.selectTaskPage(any(Page.class), eq("RUNNING"), eq("UNIT_TEST"))).thenReturn(page);
 
         // When
-        IPage<Task> result = taskService.listTasks(1, 10, "RUNNING");
+        IPage<Task> result = taskService.listTasks(1, 10, "RUNNING", "UNIT_TEST");
 
         // Then
         assertThat(result).isNotNull();
         assertThat(result.getRecords()).hasSize(2);
         assertThat(result.getRecords()).allMatch(task -> "RUNNING".equals(task.getStatus()));
-        
-        verify(taskMapper, times(1)).selectTaskPage(any(Page.class), eq("RUNNING"));
+
+        ArgumentCaptor<Page<Task>> pageCaptor = ArgumentCaptor.forClass(Page.class);
+        verify(taskMapper).selectTaskPage(pageCaptor.capture(), eq("RUNNING"), eq("UNIT_TEST"));
+        assertThat(pageCaptor.getValue().getCurrent()).isEqualTo(2);
     }
 
     @Test
@@ -215,6 +230,7 @@ public class TaskServiceTest {
         verify(taskMapper, times(1)).updateById(argThat((Task task) -> 
             "RUNNING".equals(task.getStatus()) && task.getStartedAt() != null
         ));
+        verify(eventPublisher).publishEvent(new TaskStatusChangedEvent(1L, "PENDING", "RUNNING"));
     }
 
     @Test
@@ -231,6 +247,7 @@ public class TaskServiceTest {
         verify(taskMapper, times(1)).updateById(argThat((Task task) -> 
             "SUCCESS".equals(task.getStatus()) && task.getCompletedAt() != null
         ));
+        verify(eventPublisher).publishEvent(new TaskStatusChangedEvent(1L, "PENDING", "SUCCESS"));
     }
 
     @Test
@@ -247,6 +264,7 @@ public class TaskServiceTest {
         verify(taskMapper, times(1)).updateById(argThat((Task task) -> 
             "CANCELLED".equals(task.getStatus()) && task.getCompletedAt() != null
         ));
+        verify(eventPublisher).publishEvent(new TaskStatusChangedEvent(1L, "PENDING", "CANCELLED"));
     }
 
     @Test
@@ -264,6 +282,7 @@ public class TaskServiceTest {
         verify(taskMapper, times(1)).updateById(argThat((Task task) -> 
             "CANCELLED".equals(task.getStatus()) && task.getCompletedAt() != null
         ));
+        verify(eventPublisher).publishEvent(new TaskStatusChangedEvent(1L, "PENDING", "CANCELLED"));
     }
 
     @Test
@@ -281,6 +300,7 @@ public class TaskServiceTest {
         verify(taskMapper, times(1)).updateById(argThat((Task task) -> 
             "CANCELLED".equals(task.getStatus())
         ));
+        verify(eventPublisher, times(1)).publishEvent(new TaskStatusChangedEvent(1L, "RUNNING", "CANCELLED"));
     }
 
     @Test
@@ -345,6 +365,7 @@ public class TaskServiceTest {
             errorMessage.equals(task.getErrorMessage()) &&
             task.getCompletedAt() != null
         ));
+        verify(eventPublisher).publishEvent(new TaskStatusChangedEvent(1L, "PENDING", "FAILED"));
     }
 
     @Test
@@ -369,10 +390,10 @@ public class TaskServiceTest {
         emptyPage.setRecords(Arrays.asList());
         emptyPage.setTotal(0);
 
-        when(taskMapper.selectTaskPage(any(Page.class), isNull())).thenReturn(emptyPage);
+        when(taskMapper.selectTaskPage(any(Page.class), isNull(), isNull())).thenReturn(emptyPage);
 
         // When
-        IPage<Task> result = taskService.listTasks(1, 10, null);
+        IPage<Task> result = taskService.listTasks(0, 10, null, null);
 
         // Then
         assertThat(result).isNotNull();
@@ -405,16 +426,20 @@ public class TaskServiceTest {
     }
 
     @Test
-    @DisplayName("非法依赖 JSON 不入库")
-    public void shouldRejectInvalidDependenciesJson() {
-        testRequest.setDependencies("not-json");
+    @DisplayName("依赖列表序列化成 JSON 数组，空列表写成 null")
+    public void shouldSerializeDependenciesAsJsonArray() {
+        testRequest.setDependencies(List.of("mysql:8.0", "redis:7.0"));
+        when(taskMapper.insert(any(Task.class))).thenReturn(1);
 
-        assertThatThrownBy(() -> taskService.createTask(testRequest))
-                .isInstanceOf(BusinessException.class)
-                .hasFieldOrPropertyWithValue("code", ErrorCode.VALIDATION_ERROR.getCode())
-                .hasMessage("依赖列表必须是合法 JSON");
+        taskService.createTask(testRequest);
 
-        verify(taskMapper, never()).insert(any(Task.class));
+        testRequest.setDependencies(List.of());
+        taskService.createTask(testRequest);
+
+        ArgumentCaptor<Task> inserted = ArgumentCaptor.forClass(Task.class);
+        verify(taskMapper, times(2)).insert(inserted.capture());
+        assertThat(inserted.getAllValues().get(0).getDependencies()).isEqualTo("[\"mysql:8.0\",\"redis:7.0\"]");
+        assertThat(inserted.getAllValues().get(1).getDependencies()).isNull();
     }
 
     @Test
@@ -610,21 +635,46 @@ public class TaskServiceTest {
     }
 
     @Test
-    @DisplayName("since 只丢掉带时间戳且更早的行")
-    public void shouldFilterTimestampedLinesBySince() {
+    @DisplayName("since 传给 Docker，混有无时间戳的行时保留正文时间戳")
+    public void shouldPassSinceAndKeepOriginalTimestamps() {
         Task task = TaskBuilder.aTask().withId(8L).withEnvironmentId(3L).build();
         when(taskMapper.selectById(8L)).thenReturn(task);
         Container mysql = new Container();
         mysql.setContainerId("c1");
         mysql.setContainerName("mysql");
         when(dockerService.getContainersByEnvironmentId(3L)).thenReturn(List.of(mysql));
-        when(dockerService.getContainerLogs("c1", 2)).thenReturn(
+        Instant since = Instant.parse("2026-10-09T08:00:00Z");
+        when(dockerService.getContainerLogs("c1", 3, since)).thenReturn(
                 "2026-10-09T07:00:00.000000000Z old\nplain\n2026-10-09T09:00:00.000000000Z new\n");
 
-        TaskLogsResponse response = taskService.getTaskLogs(8L, 2, "2026-10-09T08:00:00Z");
+        TaskLogsResponse response = taskService.getTaskLogs(8L, 3, "2026-10-09T08:00:00Z");
 
         assertThat(response.getLogs()).isEqualTo(
                 "--- container mysql ---\nplain\n2026-10-09T09:00:00.000000000Z new");
+        assertThat(response.isHasMore()).isTrue();
+        verify(dockerService).getContainerLogs("c1", 3, since);
+        verify(dockerService, never()).getContainerLogs(anyString(), anyInt());
+    }
+
+    @Test
+    @DisplayName("每一行都带 Docker 时间戳时去掉一层，正文里的时间戳保留")
+    public void shouldStripUniformDockerTimestampPrefixes() {
+        Task task = TaskBuilder.aTask().withId(8L).withEnvironmentId(3L).build();
+        when(taskMapper.selectById(8L)).thenReturn(task);
+        Container mysql = new Container();
+        mysql.setContainerId("c1");
+        mysql.setContainerName("mysql");
+        when(dockerService.getContainersByEnvironmentId(3L)).thenReturn(List.of(mysql));
+        Instant since = Instant.parse("2026-10-09T08:00:00Z");
+        when(dockerService.getContainerLogs("c1", 3, since)).thenReturn(
+                "2026-10-09T07:00:00.000000000Z old\n"
+                        + "2026-10-09T09:00:00.000000000Z plain\n"
+                        + "2026-10-09T09:00:00.000000000Z 2026-10-09T09:00:01Z new\n");
+
+        TaskLogsResponse response = taskService.getTaskLogs(8L, 3, "2026-10-09T08:00:00Z");
+
+        assertThat(response.getLogs()).isEqualTo(
+                "--- container mysql ---\nplain\n2026-10-09T09:00:01Z new");
         assertThat(response.isHasMore()).isTrue();
     }
 
@@ -637,5 +687,110 @@ public class TaskServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .hasFieldOrPropertyWithValue("code", ErrorCode.TASK_NOT_FOUND.getCode());
         verifyNoInteractions(dockerService);
+    }
+
+    @Test
+    @DisplayName("状态相同则不写库也不发事件")
+    public void shouldSkipUpdateAndEventWhenStatusUnchanged() {
+        when(taskMapper.selectById(1L)).thenReturn(testTask);
+
+        taskService.updateTaskStatus(1L, "PENDING");
+
+        verify(taskMapper, never()).updateById(any(Task.class));
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    @DisplayName("已经失败时更新错误信息但不重复发状态事件")
+    public void shouldNotPublishWhenAlreadyFailed() {
+        Task failedTask = TaskBuilder.aTask().withId(1L).failed().build();
+        when(taskMapper.selectById(1L)).thenReturn(failedTask);
+        when(taskMapper.updateById(any(Task.class))).thenReturn(1);
+
+        taskService.setTaskError(1L, "again");
+
+        verify(taskMapper).updateById(argThat((Task task) -> "again".equals(task.getErrorMessage())));
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    @DisplayName("优先级缺省为 5")
+    public void shouldDefaultPriorityWhenMissing() {
+        testRequest.setPriority(null);
+        when(taskMapper.insert(any(Task.class))).thenAnswer(invocation -> {
+            invocation.getArgument(0, Task.class).setId(4L);
+            return 1;
+        });
+
+        Task result = taskService.createTask(testRequest);
+
+        assertThat(result.getPriority()).isEqualTo(5);
+        verify(eventPublisher).publishEvent(new TaskCreatedEvent(4L));
+    }
+
+    @Test
+    @DisplayName("比较并设置状态成功时发事件，未命中时不发")
+    public void shouldCompareAndSetStatus() {
+        when(taskMapper.compareAndSetStatus(eq(1L), eq("PENDING"), eq("QUEUED"), isNull(), isNull()))
+                .thenReturn(1);
+
+        assertThat(taskService.transitionStatus(1L, "PENDING", "QUEUED")).isTrue();
+        verify(eventPublisher).publishEvent(new TaskStatusChangedEvent(1L, "PENDING", "QUEUED"));
+
+        when(taskMapper.compareAndSetStatus(eq(1L), eq("QUEUED"), eq("RUNNING"), any(LocalDateTime.class), isNull()))
+                .thenReturn(0);
+        assertThat(taskService.transitionStatus(1L, "QUEUED", "RUNNING")).isFalse();
+        verify(eventPublisher, never()).publishEvent(new TaskStatusChangedEvent(1L, "QUEUED", "RUNNING"));
+
+        when(taskMapper.compareAndSetStatus(eq(2L), eq("RUNNING"), eq("SUCCESS"), isNull(), any(LocalDateTime.class)))
+                .thenReturn(1);
+        assertThat(taskService.transitionStatus(2L, "RUNNING", "SUCCESS")).isTrue();
+        verify(taskMapper).compareAndSetStatus(eq(2L), eq("RUNNING"), eq("SUCCESS"), isNull(), any(LocalDateTime.class));
+        verify(eventPublisher).publishEvent(new TaskStatusChangedEvent(2L, "RUNNING", "SUCCESS"));
+    }
+
+    @Test
+    @DisplayName("比较并设置遇到未知状态时拒绝")
+    public void shouldRejectUnknownTransition() {
+        assertThatThrownBy(() -> taskService.transitionStatus(1L, "PENDING", "NOPE"))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", ErrorCode.TASK_STATUS_INVALID.getCode());
+        verify(taskMapper, never()).compareAndSetStatus(any(), any(), any(), any(), any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    @DisplayName("关联环境只更新环境 ID，任务不存在时 404")
+    public void shouldAttachEnvironment() {
+        when(taskMapper.updateEnvironmentId(1L, 9L)).thenReturn(1);
+
+        taskService.attachEnvironment(1L, 9L);
+
+        verify(taskMapper).updateEnvironmentId(1L, 9L);
+        verify(eventPublisher, never()).publishEvent(any());
+
+        when(taskMapper.updateEnvironmentId(2L, 3L)).thenReturn(0);
+        assertThatThrownBy(() -> taskService.attachEnvironment(2L, 3L))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", ErrorCode.TASK_NOT_FOUND.getCode());
+    }
+
+    @Test
+    @DisplayName("分页参数和过滤枚举不合法时 400")
+    public void shouldRejectBadListQuery() {
+        assertThatThrownBy(() -> taskService.listTasks(-1, 20, null, null))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage(TaskService.PAGE_NEGATIVE_MESSAGE);
+        assertThatThrownBy(() -> taskService.listTasks(0, 501, null, null))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage(TaskService.PAGE_SIZE_MESSAGE);
+        assertThatThrownBy(() -> taskService.listTasks(0, 20, "NOPE", null))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage(TaskService.STATUS_FILTER_MESSAGE);
+        assertThatThrownBy(() -> taskService.listTasks(0, 20, null, "WEIRD"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage(TaskService.TEST_TYPE_FILTER_MESSAGE);
+
+        verify(taskMapper, never()).selectTaskPage(any(), any(), any());
     }
 }

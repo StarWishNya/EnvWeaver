@@ -77,7 +77,7 @@ public class EndToEndIntegrationTest extends BaseTest {
                 .header("Authorization", "Bearer " + accessToken)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(createRequest)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.code").value(200))
                 .andExpect(jsonPath("$.data.id").exists())
                 .andExpect(jsonPath("$.data.taskCode").value("E2E-TEST-001"))
@@ -104,11 +104,11 @@ public class EndToEndIntegrationTest extends BaseTest {
         mockMvc.perform(get("/api/tasks")
                 .with(csrf())
                 .header("Authorization", "Bearer " + accessToken)
-                .param("pageNum", "1")
-                .param("pageSize", "10"))
+                .param("page", "0")
+                .param("size", "10"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
-                .andExpect(jsonPath("$.data.records").isArray());
+                .andExpect(jsonPath("$.data.content").isArray());
 
         // Step 5: 取消任务
         mockMvc.perform(post("/api/tasks/{taskId}/cancel", taskId)
@@ -197,19 +197,19 @@ public class EndToEndIntegrationTest extends BaseTest {
                     .header("Authorization", "Bearer " + accessToken)
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(objectMapper.writeValueAsString(request)))
-                    .andExpect(status().isOk());
+                    .andExpect(status().isCreated());
         }
 
         // Step 3: 分页查询任务
         mockMvc.perform(get("/api/tasks")
                 .with(csrf())
                 .header("Authorization", "Bearer " + accessToken)
-                .param("pageNum", "1")
-                .param("pageSize", "3"))
+                .param("page", "0")
+                .param("size", "3"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.records").isArray())
-                .andExpect(jsonPath("$.data.records.length()").value(3))
-                .andExpect(jsonPath("$.data.total").value(5));
+                .andExpect(jsonPath("$.data.content").isArray())
+                .andExpect(jsonPath("$.data.content.length()").value(3))
+                .andExpect(jsonPath("$.data.totalElements").value(5));
     }
 
     @Test
@@ -243,18 +243,18 @@ public class EndToEndIntegrationTest extends BaseTest {
                 .header("Authorization", "Bearer " + accessToken)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request1)))
-                .andExpect(status().isOk());
+                .andExpect(status().isCreated());
 
         // Step 3: 按PENDING状态过滤查询
         mockMvc.perform(get("/api/tasks")
                 .with(csrf())
                 .header("Authorization", "Bearer " + accessToken)
-                .param("pageNum", "1")
-                .param("pageSize", "10")
+                .param("page", "0")
+                .param("size", "10")
                 .param("status", "PENDING"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.records").isArray())
-                .andExpect(jsonPath("$.data.records[?(@.status != 'PENDING')]").doesNotExist());
+                .andExpect(jsonPath("$.data.content").isArray())
+                .andExpect(jsonPath("$.data.content[?(@.status != 'PENDING')]").doesNotExist());
     }
 
     @Test
@@ -290,7 +290,7 @@ public class EndToEndIntegrationTest extends BaseTest {
                 .header("Authorization", "Bearer " + accessToken)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(createRequest)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andReturn();
 
         Long taskId = objectMapper.readTree(createResult.getResponse().getContentAsString())

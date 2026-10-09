@@ -11,8 +11,11 @@ import com.sentinel.dto.CreateTaskRequest;
 import com.sentinel.dto.TaskLogsResponse;
 import com.sentinel.dto.TaskStatusResponse;
 import com.sentinel.enums.ErrorCode;
+import com.sentinel.event.TaskCreatedEvent;
+import com.sentinel.event.TaskStatusChangedEvent;
 import com.sentinel.mapper.TaskMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,6 +24,7 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -32,20 +36,56 @@ import java.util.Set;
 @Service
 public class TaskService {
 
+    public static final int DEFAULT_PAGE = 0;
+    public static final int DEFAULT_SIZE = 20;
+    public static final int MAX_PAGE_SIZE = 500;
+
+    public static final String PAGE_NEGATIVE_MESSAGE = "page 不能小于 0";
+    public static final String PAGE_SIZE_MESSAGE = "size 必须在 1 到 500 之间，大于 500 不会被静默截断";
+    public static final String STATUS_FILTER_MESSAGE = "任务状态不合法";
+    public static final String TEST_TYPE_FILTER_MESSAGE = "测试类型不合法";
+
     private static final Set<String> TASK_STATUSES = Set.of(
             "PENDING", "QUEUED", "RUNNING", "SUCCESS", "FAILED", "CANCELLED");
 
+    private static final Set<String> TEST_TYPES = Set.of(
+            "UNIT_TEST", "INTEGRATION_TEST", "E2E_TEST");
+
+    private static final int DEFAULT_PRIORITY = 5;
+
     private final TaskMapper taskMapper;
     private final DockerService dockerService;
+    private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public TaskService(TaskMapper taskMapper, DockerService dockerService) {
+    public TaskService(TaskMapper taskMapper,
+                       DockerService dockerService,
+                       ApplicationEventPublisher eventPublisher) {
         this.taskMapper = taskMapper;
         this.dockerService = dockerService;
+        this.eventPublisher = eventPublisher;
     }
 
     /**
-     * 创建任务
+     * 校验列表查询参数。空的 status / testType 表示不过滤。
+     */
+    public static void checkListQuery(int page, int size, String status, String testType) {
+        if (page < 0) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, PAGE_NEGATIVE_MESSAGE);
+        }
+        if (size < 1 || size > MAX_PAGE_SIZE) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, PAGE_SIZE_MESSAGE);
+        }
+        if (StringUtils.hasText(status) && !TASK_STATUSES.contains(status)) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, STATUS_FILTER_MESSAGE);
+        }
+        if (StringUtils.hasText(testType) && !TEST_TYPES.contains(testType)) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, TEST_TYPE_FILTER_MESSAGE);
+        }
+    }
+
+    /**
+     * 创建任务。事务提交前发布 TaskCreatedEvent，由监听器在提交后处理。
      * 
      * @param request 创建任务请求
      * @return 任务对象
@@ -58,13 +98,14 @@ public class TaskService {
         task.setTestType(request.getTestType());
         task.setDependencies(normalizeDependencies(request.getDependencies()));
         task.setStatus("PENDING");
-        task.setPriority(request.getPriority());
+        task.setPriority(request.getPriority() == null ? DEFAULT_PRIORITY : request.getPriority());
 
         try {
             taskMapper.insert(task);
         } catch (DuplicateKeyException e) {
             throw new BusinessException(ErrorCode.RESOURCE_ALREADY_EXISTS, "任务编码已存在");
         }
+        eventPublisher.publishEvent(new TaskCreatedEvent(task.getId()));
         log.info("任务创建成功: taskId={}, taskCode={}", task.getId(), task.getTaskCode());
         
         return task;
@@ -85,16 +126,18 @@ public class TaskService {
     }
 
     /**
-     * 分页查询任务列表
-     * 
-     * @param pageNum 页码
-     * @param pageSize 每页大小
+     * 分页查询任务列表。page 从 0 开始，传入 MyBatis-Plus 时加 1。
+     *
+     * @param page 页码（从 0 开始）
+     * @param size 每页大小
      * @param status 任务状态（可选）
+     * @param testType 测试类型（可选）
      * @return 分页结果
      */
-    public IPage<Task> listTasks(int pageNum, int pageSize, String status) {
-        Page<Task> page = new Page<>(pageNum, pageSize);
-        return taskMapper.selectTaskPage(page, status);
+    public IPage<Task> listTasks(int page, int size, String status, String testType) {
+        checkListQuery(page, size, status, testType);
+        Page<Task> mpPage = new Page<>(page + 1L, size);
+        return taskMapper.selectTaskPage(mpPage, emptyToNull(status), emptyToNull(testType));
     }
 
     /**
@@ -108,7 +151,7 @@ public class TaskService {
     }
 
     /**
-     * 更新任务状态
+     * 更新任务状态。状态没变时不写库、也不发事件。
      * 
      * @param taskId 任务 ID
      * @param status 新状态
@@ -119,16 +162,52 @@ public class TaskService {
             throw new BusinessException(ErrorCode.TASK_STATUS_INVALID);
         }
         Task task = getTaskById(taskId);
-        task.setStatus(status);
-        
-        if ("RUNNING".equals(status)) {
-            task.setStartedAt(LocalDateTime.now());
-        } else if ("SUCCESS".equals(status) || "FAILED".equals(status) || "CANCELLED".equals(status)) {
-            task.setCompletedAt(LocalDateTime.now());
+        String oldStatus = task.getStatus();
+        if (Objects.equals(oldStatus, status)) {
+            log.info("任务状态未变化，跳过: taskId={}, status={}", taskId, status);
+            return;
         }
+        task.setStatus(status);
+        applyStatusTimestamps(task, status);
         
         taskMapper.updateById(task);
-        log.info("任务状态更新: taskId={}, status={}", taskId, status);
+        eventPublisher.publishEvent(new TaskStatusChangedEvent(taskId, oldStatus, status));
+        log.info("任务状态更新: taskId={}, {} -> {}", taskId, oldStatus, status);
+    }
+
+    /**
+     * 比较并设置状态。当前状态不是 expected 时返回 false，不发事件。
+     * 进入 RUNNING 写 startedAt，进入终态写 completedAt，与 updateTaskStatus 一致。
+     */
+    @Transactional
+    public boolean transitionStatus(Long taskId, String expected, String next) {
+        if (!TASK_STATUSES.contains(expected) || !TASK_STATUSES.contains(next)) {
+            throw new BusinessException(ErrorCode.TASK_STATUS_INVALID);
+        }
+        LocalDateTime startedAt = "RUNNING".equals(next) ? LocalDateTime.now() : null;
+        LocalDateTime completedAt = isTerminal(next) ? LocalDateTime.now() : null;
+        int updated = taskMapper.compareAndSetStatus(taskId, expected, next, startedAt, completedAt);
+        if (updated == 0) {
+            log.info("任务状态切换未命中: taskId={}, expected={}, next={}", taskId, expected, next);
+            return false;
+        }
+        if (!Objects.equals(expected, next)) {
+            eventPublisher.publishEvent(new TaskStatusChangedEvent(taskId, expected, next));
+        }
+        log.info("任务状态切换: taskId={}, {} -> {}", taskId, expected, next);
+        return true;
+    }
+
+    /**
+     * 把环境挂到任务上。任务不存在时 404。
+     */
+    @Transactional
+    public void attachEnvironment(Long taskId, Long environmentId) {
+        int updated = taskMapper.updateEnvironmentId(taskId, environmentId);
+        if (updated == 0) {
+            throw new BusinessException(ErrorCode.TASK_NOT_FOUND);
+        }
+        log.info("任务已关联环境: taskId={}, environmentId={}", taskId, environmentId);
     }
 
     /**
@@ -140,7 +219,7 @@ public class TaskService {
     public void cancelTask(Long taskId) {
         Task task = getTaskById(taskId);
         
-        if ("SUCCESS".equals(task.getStatus()) || "FAILED".equals(task.getStatus()) || "CANCELLED".equals(task.getStatus())) {
+        if (isTerminal(task.getStatus())) {
             throw new BusinessException(ErrorCode.OPERATION_NOT_ALLOWED, "任务已完成，无法取消");
         }
         
@@ -149,7 +228,7 @@ public class TaskService {
     }
 
     /**
-     * 设置任务错误信息
+     * 设置任务错误信息。已经是 FAILED 时仍更新错误信息，但不重复发状态事件。
      * 
      * @param taskId 任务 ID
      * @param errorMessage 错误信息
@@ -157,11 +236,15 @@ public class TaskService {
     @Transactional
     public void setTaskError(Long taskId, String errorMessage) {
         Task task = getTaskById(taskId);
+        String oldStatus = task.getStatus();
         task.setErrorMessage(errorMessage);
         task.setStatus("FAILED");
         task.setCompletedAt(LocalDateTime.now());
         
         taskMapper.updateById(task);
+        if (!"FAILED".equals(oldStatus)) {
+            eventPublisher.publishEvent(new TaskStatusChangedEvent(taskId, oldStatus, "FAILED"));
+        }
         log.error("任务执行失败: taskId={}, error={}", taskId, errorMessage);
     }
 
@@ -179,7 +262,7 @@ public class TaskService {
 
     /**
      * 任务日志。tail 必须在 1..5000；since 非法时 400。
-     * 容器日志的收集方式与诊断服务一致；Docker 不支持 since 时只按行首时间戳尽力过滤。
+     * 传了 since 时交给 Docker 的 since 过滤；行首仍带 Docker 时间戳的，再用窗口兜底并去掉前缀。
      */
     public TaskLogsResponse getTaskLogs(Long taskId, int tail, String since) {
         ContainerLogWindow.checkTail(tail);
@@ -238,7 +321,7 @@ public class TaskService {
             sawContainer = true;
             String raw;
             try {
-                raw = dockerService.getContainerLogs(container.getContainerId(), tail);
+                raw = readContainerLogs(container.getContainerId(), tail, sinceTime);
             } catch (Exception ex) {
                 log.warn("读取容器日志失败，已跳过: containerId={}, reason={}",
                         container.getContainerId(), ex.getMessage());
@@ -248,6 +331,9 @@ public class TaskService {
                 hasMore = true;
             }
             String filtered = ContainerLogWindow.filterSince(raw, sinceTime);
+            if (sinceTime != null && ContainerLogWindow.uniformDockerTimestampPrefixes(raw)) {
+                filtered = ContainerLogWindow.stripDockerTimestampPrefixes(filtered);
+            }
             if (!StringUtils.hasText(filtered)) {
                 continue;
             }
@@ -270,6 +356,28 @@ public class TaskService {
         return response;
     }
 
+    /**
+     * 没传 since 时走原来的 tail 接口。传了 since 时把 Instant 交给 Docker。
+     */
+    private String readContainerLogs(String containerId, int tail, OffsetDateTime sinceTime) {
+        if (sinceTime == null) {
+            return dockerService.getContainerLogs(containerId, tail);
+        }
+        return dockerService.getContainerLogs(containerId, tail, sinceTime.toInstant());
+    }
+
+    private static void applyStatusTimestamps(Task task, String status) {
+        if ("RUNNING".equals(status)) {
+            task.setStartedAt(LocalDateTime.now());
+        } else if (isTerminal(status)) {
+            task.setCompletedAt(LocalDateTime.now());
+        }
+    }
+
+    private static boolean isTerminal(String status) {
+        return "SUCCESS".equals(status) || "FAILED".equals(status) || "CANCELLED".equals(status);
+    }
+
     private static String fallbackLogs(Task task) {
         if (StringUtils.hasText(task.getErrorMessage())) {
             return task.getErrorMessage();
@@ -277,18 +385,21 @@ public class TaskService {
         return "";
     }
 
+    private static String emptyToNull(String value) {
+        return StringUtils.hasText(value) ? value : null;
+    }
+
     /**
-     * 依赖列是 MySQL JSON。空值写成 null；非法 JSON 在入库前拒绝，避免 500。
+     * 依赖列是 MySQL JSON。空列表写成 null；非空序列化成 JSON 数组。
      */
-    private String normalizeDependencies(String dependencies) {
-        if (!StringUtils.hasText(dependencies)) {
+    private String normalizeDependencies(List<String> dependencies) {
+        if (dependencies == null || dependencies.isEmpty()) {
             return null;
         }
         try {
-            objectMapper.readTree(dependencies);
+            return objectMapper.writeValueAsString(dependencies);
         } catch (JsonProcessingException e) {
             throw new BusinessException(ErrorCode.VALIDATION_ERROR, "依赖列表必须是合法 JSON");
         }
-        return dependencies;
     }
 }

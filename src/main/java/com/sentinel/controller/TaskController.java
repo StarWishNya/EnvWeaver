@@ -1,20 +1,21 @@
 package com.sentinel.controller;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
-import com.sentinel.config.BusinessException;
 import com.sentinel.domain.Task;
 import com.sentinel.dto.ApiResponse;
 import com.sentinel.dto.CreateTaskRequest;
+import com.sentinel.dto.PageResponse;
 import com.sentinel.dto.TaskLogsResponse;
+import com.sentinel.dto.TaskResponse;
 import com.sentinel.dto.TaskStatusResponse;
 import com.sentinel.service.ContainerLogWindow;
-import com.sentinel.enums.ErrorCode;
 import com.sentinel.service.TaskService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
@@ -38,14 +39,15 @@ public class TaskController {
     }
 
     /**
-     * 创建任务
+     * 创建任务。HTTP 201，响应体仍使用统一的业务码。
      */
     @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
     @Operation(summary = "创建任务", description = "创建一个新的测试任务")
-    public ApiResponse<Task> createTask(@Valid @RequestBody CreateTaskRequest request) {
+    public ApiResponse<TaskResponse> createTask(@Valid @RequestBody CreateTaskRequest request) {
         log.info("创建任务请求: taskCode={}", request.getTaskCode());
         Task task = taskService.createTask(request);
-        return ApiResponse.success(task);
+        return ApiResponse.success(TaskResponse.from(task));
     }
 
     /**
@@ -53,26 +55,38 @@ public class TaskController {
      */
     @GetMapping("/{taskId}")
     @Operation(summary = "获取任务详情", description = "根据任务 ID 获取任务详细信息")
-    public ApiResponse<Task> getTask(
+    public ApiResponse<TaskResponse> getTask(
             @Parameter(description = "任务 ID") @PathVariable Long taskId) {
         Task task = taskService.getTaskById(taskId);
-        return ApiResponse.success(task);
+        return ApiResponse.success(TaskResponse.from(task));
     }
 
     /**
-     * 分页查询任务列表
+     * 分页查询任务列表。page 从 0 开始，size 默认 20，最大 500。
      */
     @GetMapping
-    @Operation(summary = "分页查询任务列表", description = "分页查询任务列表，支持按状态过滤")
-    public ApiResponse<IPage<Task>> listTasks(
-            @Parameter(description = "页码") @RequestParam(defaultValue = "1") int pageNum,
-            @Parameter(description = "每页大小") @RequestParam(defaultValue = "10") int pageSize,
-            @Parameter(description = "任务状态") @RequestParam(required = false) String status) {
-        if (pageNum < 1 || pageSize < 1) {
-            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "分页参数不合法");
+    @Operation(summary = "分页查询任务列表", description = "分页查询任务列表，支持按状态和测试类型过滤")
+    public ApiResponse<PageResponse<TaskResponse>> listTasks(
+            @Parameter(description = "页码，从 0 开始") @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "每页大小，1 到 500") @RequestParam(defaultValue = "20") int size,
+            @Parameter(description = "任务状态") @RequestParam(required = false) String status,
+            @Parameter(description = "测试类型") @RequestParam(required = false) String testType) {
+        TaskService.checkListQuery(page, size, status, testType);
+        IPage<Task> result = taskService.listTasks(page, size, status, testType);
+        PageResponse<TaskResponse> body = new PageResponse<>();
+        body.setContent(result.getRecords().stream().map(TaskResponse::from).toList());
+        body.setPage(page);
+        body.setSize(size);
+        body.setTotalElements(result.getTotal());
+        body.setTotalPages(totalPages(result.getTotal(), size));
+        return ApiResponse.success(body);
+    }
+
+    private static long totalPages(long totalElements, int size) {
+        if (totalElements <= 0) {
+            return 0;
         }
-        IPage<Task> page = taskService.listTasks(pageNum, pageSize, status);
-        return ApiResponse.success(page);
+        return (totalElements + size - 1) / size;
     }
 
     /**
@@ -80,9 +94,11 @@ public class TaskController {
      */
     @GetMapping("/status/{status}")
     @Operation(summary = "根据状态查询任务", description = "查询指定状态的所有任务")
-    public ApiResponse<List<Task>> listTasksByStatus(
+    public ApiResponse<List<TaskResponse>> listTasksByStatus(
             @Parameter(description = "任务状态") @PathVariable String status) {
-        List<Task> tasks = taskService.listTasksByStatus(status);
+        List<TaskResponse> tasks = taskService.listTasksByStatus(status).stream()
+                .map(TaskResponse::from)
+                .toList();
         return ApiResponse.success(tasks);
     }
 
@@ -113,13 +129,26 @@ public class TaskController {
     }
 
     /**
-     * 取消任务
+     * 取消任务。已结束返回 400，不存在返回 404。
      */
-    @PostMapping("/{taskId}/cancel")
+    @DeleteMapping("/{taskId}")
     @Operation(summary = "取消任务", description = "取消指定的任务")
-    public ApiResponse<Void> cancelTask(
+    public ApiResponse<Void> deleteTask(
             @Parameter(description = "任务 ID") @PathVariable Long taskId) {
         log.info("取消任务请求: taskId={}", taskId);
+        taskService.cancelTask(taskId);
+        return ApiResponse.success("任务已取消", null);
+    }
+
+    /**
+     * 旧的取消入口，行为与 DELETE /api/tasks/{taskId} 相同。
+     */
+    @Deprecated
+    @PostMapping("/{taskId}/cancel")
+    @Operation(summary = "取消任务（已废弃）", description = "请改用 DELETE /api/tasks/{taskId}", deprecated = true)
+    public ApiResponse<Void> cancelTask(
+            @Parameter(description = "任务 ID") @PathVariable Long taskId) {
+        log.info("取消任务请求(已废弃): taskId={}", taskId);
         taskService.cancelTask(taskId);
         return ApiResponse.success("任务已取消", null);
     }

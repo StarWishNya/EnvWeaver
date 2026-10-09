@@ -107,3 +107,46 @@ logging:
     name: /var/log/sentinel/sentinel-test.log
     max-size: 200MB
     max-history: 60
+
+# ============================================================================
+# 任务生命周期（测试关闭自动供给和自动诊断，避免碰 Docker / AI）
+# 回收与补扫间隔拉长，且首次执行同样延后，上下文启动时不会立刻跑定时任务。
+# ============================================================================
+sentinel:
+  lifecycle:
+    auto-provision: false
+    auto-diagnose: false
+    failed-retention: 30m
+    pending-sweep-interval: 24h
+    reaper-interval: 24h
+  provisioning:
+    ttl: 2h
+    port-range: "30000-39999"
+    pull-missing: true
+    pull-timeout: 5m
+    ready-timeout: 90s
+    host: localhost
+    dependencies:
+      mysql:
+        image: mysql:8.0
+        port: 3306
+        env:
+          MYSQL_ROOT_PASSWORD: sentinel
+          MYSQL_DATABASE: test
+      redis:
+        image: redis:7-alpine
+        port: 6379
+      postgres:
+        image: postgres:16-alpine
+        port: 5432
+        env:
+          POSTGRES_PASSWORD: sentinel
+      mongodb:
+        image: mongo:7
+        port: 27017
+      rabbitmq:
+        image: rabbitmq:3-management-alpine
+        port: 5672
+      nginx:
+        image: nginx:alpine
+        port: 80

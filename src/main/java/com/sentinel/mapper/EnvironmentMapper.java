@@ -5,6 +5,7 @@ import com.sentinel.domain.Environment;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
 
@@ -52,4 +53,16 @@ public interface EnvironmentMapper extends BaseMapper<Environment> {
             "LIMIT #{maxRows}" +
             "</script>")
     List<Environment> selectRecent(@Param("status") String status, @Param("maxRows") int maxRows);
+
+    /**
+     * 非空闲环境已占用的端口映射 JSON。
+     */
+    @Select("SELECT port_mappings FROM t_environment WHERE status <> 'IDLE' AND port_mappings IS NOT NULL")
+    List<String> selectActivePortMappings();
+
+    /**
+     * 供给失败：标记 ERROR，并清空端口映射，避免失败环境占住主机端口。
+     */
+    @Update("UPDATE t_environment SET status = 'ERROR', port_mappings = NULL WHERE id = #{id}")
+    int markProvisionFailed(@Param("id") Long id);
 }

@@ -4,6 +4,7 @@ import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.model.Container;
 import com.sentinel.dto.ComponentHealth;
 import com.sentinel.dto.SystemMetrics;
+import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,6 +20,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 采集系统指标，并在短超时内汇总数据库、Redis、Docker 健康状态。
@@ -39,6 +41,8 @@ public class MetricsService {
     private final List<ComponentHealthChecker> checkers;
     private final Duration timeout;
     private final ExecutorService healthExecutor;
+    private final HostMetrics.CpuLoadSamples cpuLoadSamples = new HostMetrics.CpuLoadSamples();
+    private final AtomicBoolean cpuPrimeStarted = new AtomicBoolean(false);
 
     @Autowired
     public MetricsService(DockerClient dockerClient, List<ComponentHealthChecker> checkers) {
@@ -62,6 +66,18 @@ public class MetricsService {
             thread.setDaemon(true);
             return thread;
         });
+        primeCpuLoad();
+    }
+
+    /**
+     * 启动时先读 CPU，避免第一次 /api/metrics 拿到尚未建立采样间隔时的 0。
+     */
+    @PostConstruct
+    void primeCpuLoad() {
+        if (!cpuPrimeStarted.compareAndSet(false, true)) {
+            return;
+        }
+        cpuLoadSamples.prime(this::readHostCpuQuietly);
     }
 
     /**
@@ -125,18 +141,22 @@ public class MetricsService {
 
     private SystemMetrics.Cpu readCpu() {
         int cores = 0;
-        double load = -1d;
         try {
             cores = hostMetrics.availableProcessors();
         } catch (Exception e) {
             log.warn("CPU core count unavailable: {}", e.getClass().getSimpleName());
         }
+        double load = cpuLoadSamples.observe(readHostCpuQuietly(), cpuLoadSamples.hasSample());
+        return cpuMetrics(cores, load);
+    }
+
+    private double readHostCpuQuietly() {
         try {
-            load = hostMetrics.systemCpuLoad();
+            return hostMetrics.systemCpuLoad();
         } catch (Exception e) {
             log.warn("CPU load unavailable: {}", e.getClass().getSimpleName());
+            return -1d;
         }
-        return cpuMetrics(cores, load);
     }
 
     private SystemMetrics.Memory readMemory() {

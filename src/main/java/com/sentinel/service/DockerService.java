@@ -5,6 +5,7 @@ import com.github.dockerjava.api.async.ResultCallback;
 import com.github.dockerjava.api.command.CreateContainerResponse;
 import com.github.dockerjava.api.command.HealthState;
 import com.github.dockerjava.api.command.InspectContainerResponse;
+import com.github.dockerjava.api.command.LogContainerCmd;
 import com.github.dockerjava.api.model.*;
 import com.github.dockerjava.api.exception.NotFoundException;
 import com.github.dockerjava.api.exception.NotModifiedException;
@@ -17,6 +18,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -114,7 +116,9 @@ public class DockerService {
     @Transactional
     public void stopContainer(String containerId) {
         try {
-            dockerClient.stopContainerCmd(containerId).exec();
+            dockerClient.stopContainerCmd(containerId)
+                    .withTimeout(resolveStopTimeoutSeconds())
+                    .exec();
             log.info("容器已停止: containerId={}", containerId);
 
             Container container = containerMapper.findByContainerId(containerId);
@@ -156,12 +160,25 @@ public class DockerService {
 
     /**
      * 获取容器日志
-     * 
+     *
      * @param containerId 容器 ID
      * @param tail 获取最后 N 行
      * @return 日志内容
      */
     public String getContainerLogs(String containerId, int tail) {
+        return getContainerLogs(containerId, tail, null);
+    }
+
+    /**
+     * 获取容器日志。since 不为空时只返回该时刻之后的输出，单位为 Unix 秒，
+     * 并打开 Docker timestamps。每行以 RFC3339 时间戳加一个空格开头，原样返回，由调用方去掉这一层前缀。
+     *
+     * @param containerId 容器 ID
+     * @param tail 获取最后 N 行
+     * @param since 起始时间，null 表示不按时间过滤、也不加时间戳
+     * @return 日志内容
+     */
+    public String getContainerLogs(String containerId, int tail, Instant since) {
         StringBuilder logs = new StringBuilder();
         int timeoutSeconds = resolveResponseTimeoutSeconds();
         try (ResultCallback.Adapter<Frame> callback = new ResultCallback.Adapter<Frame>() {
@@ -173,11 +190,15 @@ public class DockerService {
                 logs.append(new String(frame.getPayload(), StandardCharsets.UTF_8));
             }
         }) {
-            boolean completed = dockerClient.logContainerCmd(containerId)
+            LogContainerCmd command = dockerClient.logContainerCmd(containerId)
                     .withStdOut(true)
                     .withStdErr(true)
-                    .withTail(tail)
-                    .exec(callback)
+                    .withTail(tail);
+            if (since != null) {
+                command = command.withSince((int) since.getEpochSecond())
+                        .withTimestamps(true);
+            }
+            boolean completed = command.exec(callback)
                     .awaitCompletion(timeoutSeconds, TimeUnit.SECONDS);
             if (!completed) {
                 log.error("获取容器日志超时: containerId={}, timeoutSeconds={}", containerId, timeoutSeconds);
@@ -264,7 +285,9 @@ public class DockerService {
             return;
         }
         try {
-            dockerClient.stopContainerCmd(containerId).exec();
+            dockerClient.stopContainerCmd(containerId)
+                    .withTimeout(resolveStopTimeoutSeconds())
+                    .exec();
             log.info("容器已停止: containerId={}", containerId);
         } catch (NotFoundException ex) {
             log.info("容器已不存在，跳过停止: containerId={}", containerId);
@@ -363,6 +386,18 @@ public class DockerService {
         Integer timeout = dockerProperties.getResponseTimeout();
         if (timeout == null || timeout < 0) {
             return 60;
+        }
+        return timeout;
+    }
+
+    /**
+     * 停止容器等待退出的秒数，取自 DockerProperties.stopTimeoutSeconds。
+     * 未配置或为负数时使用 3 秒。
+     */
+    private int resolveStopTimeoutSeconds() {
+        Integer timeout = dockerProperties.getStopTimeoutSeconds();
+        if (timeout == null || timeout < 0) {
+            return 3;
         }
         return timeout;
     }

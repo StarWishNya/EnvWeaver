@@ -3,10 +3,11 @@ package com.sentinel.dto;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
+
+import java.util.List;
 
 /**
  * 创建任务请求 DTO
@@ -39,14 +40,13 @@ public class CreateTaskRequest {
     private String testType;
 
     /**
-     * 依赖列表 JSON
+     * 依赖列表，例如 ["mysql:8.0", "redis:7.0"]
      */
-    private String dependencies;
+    private List<String> dependencies;
 
     /**
-     * 优先级
+     * 优先级 1-10。不传时按 5 处理。
      */
-    @NotNull(message = "优先级不能为空")
     @Min(value = 1, message = "优先级必须在1到10之间")
     @Max(value = 10, message = "优先级必须在1到10之间")
     private Integer priority;

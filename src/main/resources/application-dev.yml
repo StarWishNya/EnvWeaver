@@ -112,3 +112,45 @@ logging:
     name: logs/sentinel-dev.log
     max-size: 100MB
     max-history: 30
+
+# ============================================================================
+# 任务生命周期（开发环境）
+# ============================================================================
+sentinel:
+  lifecycle:
+    auto-provision: true
+    auto-diagnose: true
+    failed-retention: 30m
+    pending-sweep-interval: 30s
+    reaper-interval: 60s
+  provisioning:
+    ttl: 2h
+    port-range: "30000-39999"
+    pull-missing: true
+    pull-timeout: 5m
+    ready-timeout: 90s
+    host: localhost
+    dependencies:
+      mysql:
+        image: mysql:8.0
+        port: 3306
+        env:
+          MYSQL_ROOT_PASSWORD: sentinel
+          MYSQL_DATABASE: test
+      redis:
+        image: redis:7-alpine
+        port: 6379
+      postgres:
+        image: postgres:16-alpine
+        port: 5432
+        env:
+          POSTGRES_PASSWORD: sentinel
+      mongodb:
+        image: mongo:7
+        port: 27017
+      rabbitmq:
+        image: rabbitmq:3-management-alpine
+        port: 5672
+      nginx:
+        image: nginx:alpine
+        port: 80

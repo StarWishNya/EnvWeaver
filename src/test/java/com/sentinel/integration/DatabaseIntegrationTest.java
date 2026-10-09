@@ -170,7 +170,7 @@ public class DatabaseIntegrationTest extends BaseTest {
     @DisplayName("测试分页查询任务列表")
     public void shouldSelectTaskPage_whenTasksExist() {
         // Given
-        long totalBefore = taskService.listTasks(1, 1, null).getTotal();
+        long totalBefore = taskService.listTasks(0, 1, null, null).getTotal();
         List<String> codes = new ArrayList<>();
         for (int i = 1; i <= 15; i++) {
             String code = taskCode("DB-TEST-PAGE-" + i);
@@ -179,7 +179,7 @@ public class DatabaseIntegrationTest extends BaseTest {
         }
 
         // When
-        IPage<Task> page = taskService.listTasks(1, 10, null);
+        IPage<Task> page = taskService.listTasks(0, 10, null, null);
 
         // Then
         assertThat(page).isNotNull();
@@ -193,7 +193,7 @@ public class DatabaseIntegrationTest extends BaseTest {
     @DisplayName("测试分页查询第二页")
     public void shouldSelectSecondPage_whenMultiplePagesExist() {
         // Given
-        long totalBefore = taskService.listTasks(1, 1, null).getTotal();
+        long totalBefore = taskService.listTasks(0, 1, null, null).getTotal();
         int inserted = 25;
         for (int i = 1; i <= inserted; i++) {
             insertTask(TaskBuilder.aTask()
@@ -203,7 +203,7 @@ public class DatabaseIntegrationTest extends BaseTest {
         }
 
         // When
-        IPage<Task> page = taskService.listTasks(2, 10, null);
+        IPage<Task> page = taskService.listTasks(1, 10, null, null);
 
         // Then
         assertThat(page).isNotNull();

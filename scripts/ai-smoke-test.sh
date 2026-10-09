@@ -87,7 +87,7 @@ request POST "${BASE_URL}/api/tasks" \
   -H "Authorization: Bearer ${ACCESS_TOKEN}" \
   -H 'Content-Type: application/json' \
   -d "{\"taskCode\":\"${TASK_CODE}\",\"serviceId\":\"${SERVICE_ID}\",\"testType\":\"UNIT_TEST\",\"priority\":5}"
-expect_http "POST /api/tasks" '^200$'
+expect_http "POST /api/tasks" '^201$'
 TASK_ID="$(json_get '.data.id' "$RESP_BODY")"
 if [[ -z "$TASK_ID" || "$TASK_ID" == "null" ]]; then
   printf '%s\n' "$RESP_BODY" >&2

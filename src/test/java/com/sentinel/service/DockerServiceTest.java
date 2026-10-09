@@ -34,6 +34,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.Closeable;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -275,6 +276,7 @@ public class DockerServiceTest {
     public void shouldStopContainerByContainerId() {
         StopContainerCmd stopCmd = mock(StopContainerCmd.class);
         when(dockerClient.stopContainerCmd("cid-9")).thenReturn(stopCmd);
+        when(stopCmd.withTimeout(eq(3))).thenReturn(stopCmd);
         doNothing().when(stopCmd).exec();
 
         Container row = new Container();
@@ -291,6 +293,7 @@ public class DockerServiceTest {
         assertThat(captor.getValue().getId()).isEqualTo(42L);
         assertThat(captor.getValue().getStatus()).isEqualTo("STOPPED");
         assertThat(captor.getValue().getStoppedAt()).isNotNull();
+        verify(stopCmd).withTimeout(eq(3));
         verify(containerMapper, never()).selectList(nullable(Wrapper.class));
     }
 
@@ -464,6 +467,70 @@ public class DockerServiceTest {
                 .hasMessageContaining("0");
     }
 
+    @Test
+    @DisplayName("停止容器使用可配置的超时时间")
+    public void shouldUseConfiguredStopTimeout() {
+        dockerProperties.setStopTimeoutSeconds(9);
+        StopContainerCmd stopCmd = stubStop("cid-stop-timeout", null);
+        dockerService.stopContainer("cid-stop-timeout");
+        verify(stopCmd).withTimeout(eq(9));
+
+        dockerProperties.setStopTimeoutSeconds(4);
+        StopContainerCmd removeStop = stubStop("cid-remove-timeout", null);
+        stubForceRemove("cid-remove-timeout", null);
+        dockerService.stopAndRemoveContainer("cid-remove-timeout");
+        verify(removeStop).withTimeout(eq(4));
+
+        dockerProperties.setStopTimeoutSeconds(null);
+        StopContainerCmd fallback = stubStop("cid-stop-fallback", null);
+        dockerService.stopContainer("cid-stop-fallback");
+        verify(fallback).withTimeout(eq(3));
+    }
+
+    @Test
+    @DisplayName("since 以 Unix 秒传给 Docker，并打开行首 RFC3339 时间戳")
+    public void shouldPassSinceSecondsToLogCommand() throws Exception {
+        LogContainerCmd logCmd = stubLogCmd("cid-since");
+        when(logCmd.withSince(any(Integer.class))).thenReturn(logCmd);
+        when(logCmd.withTimestamps(eq(Boolean.TRUE))).thenReturn(logCmd);
+        Closeable stream = mock(Closeable.class);
+        doAnswer(invocation -> {
+            ResultCallback<Frame> callback = invocation.getArgument(0);
+            callback.onStart(stream);
+            callback.onNext(new Frame(StreamType.STDOUT,
+                    "2026-10-09T08:00:01.000000000Z log".getBytes(StandardCharsets.UTF_8)));
+            callback.onComplete();
+            return callback;
+        }).when(logCmd).exec(any(ResultCallback.class));
+
+        Instant since = Instant.ofEpochSecond(1_700_000_000L);
+        String logs = dockerService.getContainerLogs("cid-since", 15, since);
+
+        assertThat(logs).isEqualTo("2026-10-09T08:00:01.000000000Z log");
+        verify(logCmd).withSince(eq(1_700_000_000));
+        verify(logCmd).withTimestamps(eq(Boolean.TRUE));
+        verify(logCmd).withStdOut(eq(Boolean.TRUE));
+        verify(logCmd).withStdErr(eq(Boolean.TRUE));
+        verify(logCmd).withTail(eq(15));
+        verify(stream).close();
+    }
+
+    @Test
+    @DisplayName("since 为空时不设置时间过滤，也不加时间戳")
+    public void shouldLeaveSinceUnsetWhenNull() throws Exception {
+        LogContainerCmd logCmd = stubLogCmd("cid-nosince");
+        doAnswer(invocation -> {
+            ResultCallback<Frame> callback = invocation.getArgument(0);
+            callback.onComplete();
+            return callback;
+        }).when(logCmd).exec(any(ResultCallback.class));
+
+        assertThat(dockerService.getContainerLogs("cid-nosince", 4)).isEmpty();
+        assertThat(dockerService.getContainerLogs("cid-nosince", 4, null)).isEmpty();
+        verify(logCmd, never()).withSince(any(Integer.class));
+        verify(logCmd, never()).withTimestamps(any());
+    }
+
     private CreateContainerCmd stubCreateCmd() {
         CreateContainerCmd createCmd = mock(CreateContainerCmd.class);
         when(dockerClient.createContainerCmd(anyString())).thenReturn(createCmd);
@@ -502,6 +569,7 @@ public class DockerServiceTest {
     private StopContainerCmd stubStop(String containerId, RuntimeException execError) {
         StopContainerCmd stopCmd = mock(StopContainerCmd.class);
         when(dockerClient.stopContainerCmd(containerId)).thenReturn(stopCmd);
+        when(stopCmd.withTimeout(any(Integer.class))).thenReturn(stopCmd);
         if (execError == null) {
             doNothing().when(stopCmd).exec();
         } else {

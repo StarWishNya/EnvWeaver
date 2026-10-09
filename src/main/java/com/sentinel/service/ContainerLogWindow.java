@@ -12,9 +12,9 @@ import java.time.format.DateTimeFormatter;
 import java.time.temporal.TemporalAccessor;
 
 /**
- * 任务日志的 tail / since 校验，以及按行首时间戳做尽力过滤。
- * DockerService 只有 tail，没有 since 参数，因此无法在 Docker 侧截断；
- * 行首能解析成 ISO-8601 的日志会按 since 丢掉更早的行，没有时间戳的行原样保留。
+ * 任务日志的 tail / since 校验。
+ * since 优先交给 Docker 过滤。这里只兜底：行首还能解析出时间戳、且早于 since 的行丢掉；
+ * 没有时间戳的行保留。Docker timestamps 加在行首的那一层前缀要去掉，正文里原有的时间戳留下。
  *
  * @author Sentinel Team
  */
@@ -103,6 +103,77 @@ public final class ContainerLogWindow {
             kept.append('\n');
         }
         return kept.toString();
+    }
+
+    /**
+     * 每一条非空行都以带时区的时间戳加空格开头时，这些前缀是 Docker timestamps 加上的。
+     * 只要有一行没有这种前缀，时间戳就属于日志正文。
+     */
+    public static boolean uniformDockerTimestampPrefixes(String logs) {
+        if (logs == null || logs.isEmpty()) {
+            return false;
+        }
+        String[] lines = logs.split("\n", -1);
+        boolean trailingNewline = logs.endsWith("\n");
+        int limit = trailingNewline ? lines.length - 1 : lines.length;
+        boolean sawLine = false;
+        for (int i = 0; i < limit; i++) {
+            if (lines[i].isEmpty()) {
+                continue;
+            }
+            sawLine = true;
+            if (!hasDockerTimestampPrefix(lines[i])) {
+                return false;
+            }
+        }
+        return sawLine;
+    }
+
+    /**
+     * 去掉每行开头的一层 Docker 时间戳（带时区的 RFC3339，后面紧跟一个空格）。
+     * 没有空格、或行首时间不带时区时视为日志正文，整行保留。只剥一层。
+     */
+    public static String stripDockerTimestampPrefixes(String logs) {
+        if (logs == null || logs.isEmpty()) {
+            return logs == null ? "" : logs;
+        }
+        String[] lines = logs.split("\n", -1);
+        boolean trailingNewline = logs.endsWith("\n");
+        int limit = trailingNewline ? lines.length - 1 : lines.length;
+        StringBuilder kept = new StringBuilder();
+        for (int i = 0; i < limit; i++) {
+            if (kept.length() > 0) {
+                kept.append('\n');
+            }
+            kept.append(stripOneDockerPrefix(lines[i]));
+        }
+        if (kept.length() > 0 && trailingNewline) {
+            kept.append('\n');
+        }
+        return kept.toString();
+    }
+
+    private static String stripOneDockerPrefix(String line) {
+        if (!hasDockerTimestampPrefix(line)) {
+            return line == null ? "" : line;
+        }
+        return line.substring(line.indexOf(' ') + 1);
+    }
+
+    private static boolean hasDockerTimestampPrefix(String line) {
+        if (line == null || line.isEmpty()) {
+            return false;
+        }
+        int space = line.indexOf(' ');
+        if (space <= 0) {
+            return false;
+        }
+        try {
+            OffsetDateTime.parse(line.substring(0, space));
+            return true;
+        } catch (DateTimeException ex) {
+            return false;
+        }
     }
 
     private static boolean isBeforeSince(String line, OffsetDateTime since) {
