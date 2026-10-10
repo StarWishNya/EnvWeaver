@@ -11,16 +11,22 @@ import com.sentinel.enums.ErrorCode;
 import com.sentinel.service.ContainerLogWindow;
 import com.sentinel.config.BusinessException;
 import com.sentinel.config.GlobalExceptionHandler;
+import com.sentinel.config.JwtAuthenticationFilter;
+import com.sentinel.config.SecurityConfig;
+import com.sentinel.config.properties.SecurityProperties;
+import com.sentinel.mapper.UserMapper;
+import com.sentinel.service.CacheService;
+import com.sentinel.service.UserDetailsServiceImpl;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import com.sentinel.service.TaskService;
 import com.sentinel.util.JwtUtil;
-import com.sentinel.config.JwtAuthenticationFilter;
 import com.sentinel.testutil.CreateTaskRequestBuilder;
 import com.sentinel.testutil.TaskBuilder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -43,8 +49,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 测试任务管理相关的所有接口
  */
 @WebMvcTest(TaskController.class)
-@AutoConfigureMockMvc(addFilters = false)
-@Import(GlobalExceptionHandler.class)
+@AutoConfigureMockMvc(addFilters = true)
+@Import({GlobalExceptionHandler.class, SecurityConfig.class, JwtAuthenticationFilter.class})
+@EnableConfigurationProperties(SecurityProperties.class)
 @DisplayName("TaskController 测试")
 public class TaskControllerTest {
 
@@ -61,7 +68,13 @@ public class TaskControllerTest {
     private JwtUtil jwtUtil;
 
     @MockBean
-    private JwtAuthenticationFilter jwtAuthenticationFilter;
+    private CacheService cacheService;
+
+    @MockBean
+    private UserMapper userMapper;
+
+    @MockBean
+    private UserDetailsServiceImpl userDetailsService;
 
     @Test
     @WithMockUser
@@ -303,18 +316,24 @@ public class TaskControllerTest {
     }
 
     @Test
+    @DisplayName("更新任务状态无令牌时返回 401")
+    public void shouldReturnUnauthorized_whenUpdateStatusWithoutToken() throws Exception {
+        mockMvc.perform(put("/api/tasks/{taskId}/status", 1L)
+                        .param("status", "RUNNING"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(1001))
+                .andExpect(jsonPath("$.message").value("未授权，请先登录"));
+
+        verify(taskService, never()).updateTaskStatus(anyLong(), anyString());
+    }
+
+    @Test
     @WithMockUser(roles = "USER")
     @DisplayName("测试更新任务状态失败 - 非管理员权限")
-    @org.junit.jupiter.api.Disabled("需要启用 Security 过滤器才能测试权限控制")
     public void shouldReturnForbidden_whenUserIsNotAdmin() throws Exception {
-        // Given
-        Long taskId = 1L;
-        String newStatus = "RUNNING";
-
-        // When & Then
-        mockMvc.perform(put("/api/tasks/{taskId}/status", taskId)
-                .with(csrf())
-                .param("status", newStatus))
+        mockMvc.perform(put("/api/tasks/{taskId}/status", 1L)
+                        .with(csrf())
+                        .param("status", "RUNNING"))
                 .andExpect(status().isForbidden());
 
         verify(taskService, never()).updateTaskStatus(anyLong(), anyString());
