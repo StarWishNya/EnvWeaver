@@ -165,30 +165,7 @@ sentinel:
     pull-timeout: ${SENTINEL_PROVISION_PULL_TIMEOUT:5m}
     ready-timeout: ${SENTINEL_PROVISION_READY_TIMEOUT:90s}
     host: ${SENTINEL_PROVISION_HOST:localhost}
-    dependencies:
-      mysql:
-        image: mysql:8.0
-        port: 3306
-        env:
-          MYSQL_ROOT_PASSWORD: ${SENTINEL_MYSQL_ROOT_PASSWORD:sentinel}
-          MYSQL_DATABASE: test
-      redis:
-        image: redis:7-alpine
-        port: 6379
-      postgres:
-        image: postgres:16-alpine
-        port: 5432
-        env:
-          POSTGRES_PASSWORD: ${SENTINEL_POSTGRES_PASSWORD:sentinel}
-      mongodb:
-        image: mongo:7
-        port: 27017
-      rabbitmq:
-        image: rabbitmq:3-management-alpine
-        port: 5672
-      nginx:
-        image: nginx:alpine
-        port: 80
+    # 依赖以 catalog/middleware.yaml 为准。覆盖默认版本或口令时再写 dependencies.<kind>。
 
   # 运行中容器的 CPU、内存采样
   monitoring:

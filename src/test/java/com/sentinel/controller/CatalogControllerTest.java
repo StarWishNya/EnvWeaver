@@ -61,7 +61,7 @@ class CatalogControllerTest {
         mockMvc.perform(get("/api/catalog/middleware"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
-                .andExpect(jsonPath("$.data.revision").value("2026-10-10.1"))
+                .andExpect(jsonPath("$.data.revision").value("2026-10-10.2"))
                 .andExpect(jsonPath("$.data.kinds[0].kind").value("mysql"))
                 .andExpect(jsonPath("$.data.kinds[0].defaultVersion").value("8.0"))
                 .andExpect(jsonPath("$.data.kinds[0].versions[0].version").value("5.7"))
@@ -73,8 +73,12 @@ class CatalogControllerTest {
                 .andExpect(jsonPath("$.data.kinds[1].defaultVersion").value("7"))
                 .andExpect(jsonPath("$.data.kinds[1].versions[1].aliases[0]").value("7.0"))
                 .andExpect(jsonPath("$.data.kinds[1].versions[1].aliases[1]").value("7.2"))
-                .andExpect(jsonPath("$.data.kinds[5].kind").value("kafka"))
-                .andExpect(jsonPath("$.data.kinds[5].versions[0].image").value("apache/kafka:3.7.0"))
+                .andExpect(jsonPath("$.data.kinds[4].kind").value("rabbitmq"))
+                .andExpect(jsonPath("$.data.kinds[4].defaultVersion").value("3.13"))
+                .andExpect(jsonPath("$.data.kinds[4].versions[0].image").value("rabbitmq:3.13-management-alpine"))
+                .andExpect(jsonPath("$.data.kinds[4].versions[0].containerPort").value(5672))
+                .andExpect(jsonPath("$.data.kinds[6].kind").value("kafka"))
+                .andExpect(jsonPath("$.data.kinds[6].versions[0].image").value("apache/kafka:3.7.0"))
                 .andExpect(jsonPath("$.data.kinds[0].versions[1].env").doesNotExist());
     }
 

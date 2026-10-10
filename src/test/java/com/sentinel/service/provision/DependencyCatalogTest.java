@@ -79,8 +79,18 @@ class DependencyCatalogTest {
         assertThat(catalog.require("mongodb").getContainerPort()).isEqualTo(27017);
         assertThat(catalog.require("nginx").getImage()).isEqualTo("nginx:1.27-alpine");
         assertThat(catalog.require("nginx").getContainerPort()).isEqualTo(80);
+
+        DependencySpec rabbitmq = catalog.require("rabbitmq");
+        assertThat(rabbitmq.getImage()).isEqualTo("rabbitmq:3.13-management-alpine");
+        assertThat(rabbitmq.getContainerPort()).isEqualTo(5672);
+        assertThat(rabbitmq.getEnvironment())
+                .containsEntry("RABBITMQ_DEFAULT_USER", "sentinel")
+                .containsEntry("RABBITMQ_DEFAULT_PASS", DependencyCatalog.DEFAULT_PASSWORD);
+
         assertThat(catalog.require("kafka").getImage()).isEqualTo("apache/kafka:3.7.0");
         assertThat(catalog.require("kafka").getContainerPort()).isEqualTo(9092);
+        assertThat(catalog.require("kafka").getEnvironment())
+                .containsEntry("KAFKA_ADVERTISED_LISTENERS", "PLAINTEXT://${HOST}:${HOST_PORT}");
     }
 
     @Test
@@ -90,12 +100,12 @@ class DependencyCatalogTest {
                 () -> catalog.resolve("[\"oracle\"]"), BusinessException.class);
         assertThat(unknown).isNotNull();
         assertThat(unknown.getMessage()).isEqualTo(
-                "未知依赖: oracle，可选种类: mysql, redis, postgres, mongodb, nginx, kafka");
+                "未知依赖: oracle，可选种类: mysql, redis, postgres, mongodb, rabbitmq, nginx, kafka");
         assertThat(unknown.getCode()).isEqualTo(ErrorCode.VALIDATION_ERROR.getCode());
 
         assertThatThrownBy(() -> catalog.resolve("mysql, etcd, Kafka:3"))
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("未知依赖: etcd，可选种类: mysql, redis, postgres, mongodb, nginx, kafka; "
+                .hasMessage("未知依赖: etcd，可选种类: mysql, redis, postgres, mongodb, rabbitmq, nginx, kafka; "
                         + "未知依赖版本: Kafka:3，可选版本: 3.7");
     }
 

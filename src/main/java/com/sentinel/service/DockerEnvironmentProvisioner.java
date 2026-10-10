@@ -14,6 +14,7 @@ import com.sentinel.mapper.EnvironmentMapper;
 import com.sentinel.service.provision.ContainerLauncher;
 import com.sentinel.service.provision.DependencyCatalog;
 import com.sentinel.service.provision.DependencySpec;
+import com.sentinel.service.provision.EnvPlaceholders;
 import com.sentinel.service.provision.DockerMessages;
 import com.sentinel.service.provision.PortAllocator;
 import com.sentinel.service.provision.ProvisioningFailedException;
@@ -227,7 +228,7 @@ public class DockerEnvironmentProvisioner implements EnvironmentProvisioner {
                 name,
                 spec.getContainerPort(),
                 hostPort,
-                spec.getEnvironment(),
+                launchEnvironment(spec, hostPort),
                 labels);
         ContainerLauncher.StartedContainer startedContainer;
         try {
@@ -395,9 +396,10 @@ public class DockerEnvironmentProvisioner implements EnvironmentProvisioner {
             yaml.append("    container_name: ").append(yamlQuote(containerName(envCode, spec.getName()))).append('\n');
             yaml.append("    ports:\n");
             yaml.append("      - ").append(yamlQuote(hostPort + ":" + spec.getContainerPort())).append('\n');
-            if (!spec.getEnvironment().isEmpty()) {
+            Map<String, String> environment = launchEnvironment(spec, hostPort);
+            if (!environment.isEmpty()) {
                 yaml.append("    environment:\n");
-                for (Map.Entry<String, String> entry : spec.getEnvironment().entrySet()) {
+                for (Map.Entry<String, String> entry : environment.entrySet()) {
                     yaml.append("      ").append(entry.getKey()).append(": ").append(yamlQuote(entry.getValue())).append('\n');
                 }
             }
@@ -457,6 +459,10 @@ public class DockerEnvironmentProvisioner implements EnvironmentProvisioner {
             return Duration.ofHours(2);
         }
         return configured;
+    }
+
+    private Map<String, String> launchEnvironment(DependencySpec spec, int hostPort) {
+        return EnvPlaceholders.substitute(spec.getEnvironment(), resolveHost(), hostPort);
     }
 
     private String resolveHost() {

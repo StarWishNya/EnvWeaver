@@ -77,7 +77,8 @@ class ResourceUsagePropertiesBindingTest {
         assertThat(source.getProperty("sentinel.lifecycle.auto-provision")).isNotNull();
         assertThat(source.getProperty("sentinel.lifecycle.reaper-interval")).isNotNull();
         assertThat(source.getProperty("sentinel.provisioning.ttl")).isNotNull();
-        assertThat(source.getProperty("sentinel.provisioning.dependencies.mysql.image")).isEqualTo("mysql:8.0");
+        assertThat(source.getProperty("sentinel.provisioning.port-range")).isNotNull();
+        assertThat(source.getProperty("sentinel.provisioning.dependencies.mysql.image")).isNull();
         assertThat(source.getProperty("sentinel.monitoring.resource-usage.enabled")).isEqualTo(enabled);
         assertThat(source.getProperty("sentinel.monitoring.resource-usage.interval")).isEqualTo(interval);
         assertThat(source.getProperty("sentinel.monitoring.resource-usage.read-timeout")).isEqualTo("5s");

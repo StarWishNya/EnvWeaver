@@ -242,6 +242,8 @@ textarea { min-height: 120px; resize: vertical; font-family: var(--font-mono); f
   color: var(--ink);
 }
 .checks input { width: auto; }
+.dep-choice { display: flex; align-items: center; gap: 8px; }
+.dep-choice select { width: auto; padding: 4px 8px; }
 
 .btn {
   display: inline-flex;

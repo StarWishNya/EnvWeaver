@@ -23,8 +23,9 @@ class MiddlewareCatalogTest {
     void loadsShippedCatalog() {
         MiddlewareCatalog catalog = MiddlewareCatalog.load();
 
-        assertThat(catalog.getRevision()).isEqualTo("2026-10-10.1");
-        assertThat(catalog.kindNames()).containsExactly("mysql", "redis", "postgres", "mongodb", "nginx", "kafka");
+        assertThat(catalog.getRevision()).isEqualTo("2026-10-10.2");
+        assertThat(catalog.kindNames()).containsExactly(
+                "mysql", "redis", "postgres", "mongodb", "rabbitmq", "nginx", "kafka");
 
         MiddlewareKind mysql = catalog.kind("mysql");
         assertThat(mysql.getDefaultVersion()).isEqualTo("8.0");
@@ -46,10 +47,47 @@ class MiddlewareCatalogTest {
         assertThat(catalog.kind("postgres").getDefaultVersion()).isEqualTo("16");
         assertThat(catalog.kind("nginx").getVersions()).extracting(CatalogVersion::getImage)
                 .containsExactly("nginx:1.25-alpine", "nginx:1.27-alpine");
-        assertThat(catalog.kind("kafka").getVersions().get(0).getImage()).isEqualTo("apache/kafka:3.7.0");
-        assertThat(catalog.kind("kafka").getVersions().get(0).getEnvironment())
+        CatalogVersion rabbitmq = catalog.kind("rabbitmq").getVersions().get(0);
+        assertThat(catalog.kind("rabbitmq").getDefaultVersion()).isEqualTo("3.13");
+        assertThat(rabbitmq.getImage()).isEqualTo("rabbitmq:3.13-management-alpine");
+        assertThat(rabbitmq.getContainerPort()).isEqualTo(5672);
+        assertThat(rabbitmq.getEnvironment())
+                .containsEntry("RABBITMQ_DEFAULT_USER", "sentinel")
+                .containsEntry("RABBITMQ_DEFAULT_PASS", "sentinel");
+        assertThat(rabbitmq.getReadiness().getType()).isEqualTo("tcp");
+        assertThat(rabbitmq.getReadiness().getPort()).isEqualTo(5672);
+
+        CatalogVersion kafka = catalog.kind("kafka").getVersions().get(0);
+        assertThat(kafka.getImage()).isEqualTo("apache/kafka:3.7.0");
+        assertThat(kafka.getContainerPort()).isEqualTo(9092);
+        assertThat(kafka.getEnvironment())
                 .containsEntry("KAFKA_PROCESS_ROLES", "broker,controller")
+                .containsEntry("KAFKA_LISTENERS", "PLAINTEXT://:9092,CONTROLLER://:9093")
+                .containsEntry("KAFKA_ADVERTISED_LISTENERS", "PLAINTEXT://${HOST}:${HOST_PORT}")
                 .containsEntry("CLUSTER_ID", "MkU3OEVBNTcwNTJENDM2Qk");
+    }
+
+    @Test
+    @DisplayName("环境变量只允许已知占位符")
+    void rejectsUnknownAndUnclosedPlaceholders() {
+        Map<String, Object> unknown = version("8.0", null, "mysql:8.0", 3306);
+        unknown.put("env", Map.of("MYSQL_ROOT_PASSWORD", "PLAINTEXT://${BROKER}:${HOST_PORT}"));
+        assertThatThrownBy(() -> MiddlewareCatalog.fromDocument(root(kind("8.0", List.of(unknown))), "test"))
+                .isInstanceOf(CatalogLoadException.class)
+                .hasMessageContaining("未知占位符")
+                .hasMessageContaining("${BROKER}");
+
+        Map<String, Object> unclosed = version("8.0", null, "mysql:8.0", 3306);
+        unclosed.put("env", Map.of("MYSQL_ROOT_PASSWORD", "PLAINTEXT://${HOST"));
+        assertThatThrownBy(() -> MiddlewareCatalog.fromDocument(root(kind("8.0", List.of(unclosed))), "test"))
+                .isInstanceOf(CatalogLoadException.class)
+                .hasMessageContaining("未闭合");
+
+        Map<String, Object> accepted = version("8.0", null, "mysql:8.0", 3306);
+        accepted.put("env", Map.of("MYSQL_ROOT_PASSWORD", "PLAINTEXT://${HOST}:${HOST_PORT}"));
+        MiddlewareCatalog catalog = MiddlewareCatalog.fromDocument(root(kind("8.0", List.of(accepted))), "test");
+        assertThat(catalog.kind("mysql").getVersions().get(0).getEnvironment())
+                .containsEntry("MYSQL_ROOT_PASSWORD", "PLAINTEXT://${HOST}:${HOST_PORT}");
     }
 
     @Test

@@ -1,5 +1,5 @@
 schemaVersion: 1
-revision: "2026-10-10.1"
+revision: "2026-10-10.2"
 kinds:
   mysql:
     defaultVersion: "8.0"
@@ -109,6 +109,22 @@ kinds:
         resources:
           memoryMb: 512
           cpu: 0.5
+  rabbitmq:
+    defaultVersion: "3.13"
+    versions:
+      - version: "3.13"
+        image: rabbitmq:3.13-management-alpine
+        containerPort: 5672
+        env:
+          RABBITMQ_DEFAULT_USER: sentinel
+          RABBITMQ_DEFAULT_PASS: sentinel
+        readiness:
+          type: tcp
+          port: 5672
+          startupGraceSeconds: 20
+        resources:
+          memoryMb: 512
+          cpu: 0.5
   nginx:
     defaultVersion: "1.27"
     versions:
@@ -144,7 +160,8 @@ kinds:
           KAFKA_NODE_ID: "1"
           KAFKA_PROCESS_ROLES: broker,controller
           KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://127.0.0.1:9092
+          # ${HOST}、${HOST_PORT} 在分配主机端口后替换。容器内仍绑定 9092。
+          KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://${HOST}:${HOST_PORT}"
           KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
           KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
           KAFKA_CONTROLLER_QUORUM_VOTERS: 1@127.0.0.1:9093

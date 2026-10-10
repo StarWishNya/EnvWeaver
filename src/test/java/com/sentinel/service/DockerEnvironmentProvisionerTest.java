@@ -344,7 +344,7 @@ class DockerEnvironmentProvisionerTest {
         assertThat(failure).isNotInstanceOf(ProvisioningFailedException.class);
         assertThat(failure.getCode()).isEqualTo(ErrorCode.VALIDATION_ERROR.getCode());
         assertThat(failure.getMessage()).isEqualTo(
-                "未知依赖: oracle，可选种类: mysql, redis, postgres, mongodb, nginx, kafka");
+                "未知依赖: oracle，可选种类: mysql, redis, postgres, mongodb, rabbitmq, nginx, kafka");
         verify(environmentMapper, never()).insert(any(Environment.class));
         verifyNoInteractions(portAllocator);
         verifyNoInteractions(containerLauncher);
@@ -442,6 +442,38 @@ class DockerEnvironmentProvisionerTest {
         assertThat(failure.getMessage()).isEqualTo("环境创建失败");
         verify(environmentMapper).markProvisionFailed(42L);
         verifyNoInteractions(containerLauncher);
+    }
+
+    @Test
+    @DisplayName("Kafka 对外地址在分配端口后替换为主机和主机端口")
+    void kafkaAdvertisedListenerUsesAllocatedHostPort() {
+        provisioningProperties.setHost("127.0.0.1");
+        when(portAllocator.allocate(1)).thenReturn(List.of(36210));
+        stubEnvironmentInsert();
+        stubContainerInsert();
+        when(containerLauncher.start(any())).thenReturn(new ContainerLauncher.StartedContainer("cid-kafka", false));
+        when(containerLauncher.inspect("cid-kafka")).thenReturn(new ContainerLauncher.Snapshot(true, null));
+        when(tcpProbe.accepts("127.0.0.1", 36210)).thenReturn(true);
+
+        Environment created = provisioner.provision(task(11L, "[\"kafka\"]"));
+
+        ArgumentCaptor<ContainerLauncher.Launch> launches = ArgumentCaptor.forClass(ContainerLauncher.Launch.class);
+        verify(containerLauncher).start(launches.capture());
+        ContainerLauncher.Launch launch = launches.getValue();
+        assertThat(launch.image()).isEqualTo("apache/kafka:3.7.0");
+        assertThat(launch.containerPort()).isEqualTo(9092);
+        assertThat(launch.hostPort()).isEqualTo(36210);
+        assertThat(launch.env())
+                .containsEntry("KAFKA_LISTENERS", "PLAINTEXT://:9092,CONTROLLER://:9093")
+                .containsEntry("KAFKA_ADVERTISED_LISTENERS", "PLAINTEXT://127.0.0.1:36210")
+                .containsEntry("KAFKA_CONTROLLER_QUORUM_VOTERS", "1@127.0.0.1:9093");
+        assertThat(created.getComposeContent())
+                .contains("36210:9092")
+                .contains("PLAINTEXT://127.0.0.1:36210")
+                .doesNotContain("${HOST}");
+        ArgumentCaptor<Container> containers = ArgumentCaptor.forClass(Container.class);
+        verify(containerMapper).insert(containers.capture());
+        assertThat(containers.getValue().getPortMapping()).isEqualTo("9092:36210");
     }
 
     private void stubEnvironmentInsert() {

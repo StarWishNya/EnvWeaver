@@ -217,9 +217,8 @@ sentinel:
     pending-sweep-interval: 30s
     # 过期环境回收间隔
     reaper-interval: 60s
-  # 按任务依赖启动容器。种类和版本在 catalog/middleware.yaml。
-  # dependencies 覆盖同名种类的默认版本；显式的非默认 kind:version 用目录条目。
-  # 目录里没有的种类可以在这里新增，但必须同时给出 image 和 port。
+  # 按任务依赖启动容器。种类、版本和镜像在 catalog/middleware.yaml。
+  # 运维逃生口：要覆盖某种类的默认版本，或增加目录里没有的种类，再写 dependencies.<kind>（须含 image 与 port）。
   provisioning:
     ttl: 2h
     port-range: "30000-39999"
@@ -229,30 +228,6 @@ sentinel:
     host: localhost
     # 容器端口只发布到本机，环境内数据库为固定弱口令
     bind-address: ${SENTINEL_PROVISIONING_BIND_ADDRESS:127.0.0.1}
-    dependencies:
-      mysql:
-        image: mysql:8.0
-        port: 3306
-        env:
-          MYSQL_ROOT_PASSWORD: sentinel
-          MYSQL_DATABASE: test
-      redis:
-        image: redis:7-alpine
-        port: 6379
-      postgres:
-        image: postgres:16-alpine
-        port: 5432
-        env:
-          POSTGRES_PASSWORD: sentinel
-      mongodb:
-        image: mongo:7
-        port: 27017
-      rabbitmq:
-        image: rabbitmq:3-management-alpine
-        port: 5672
-      nginx:
-        image: nginx:alpine
-        port: 80
 
   # 运行中容器的 CPU、内存采样
   monitoring:

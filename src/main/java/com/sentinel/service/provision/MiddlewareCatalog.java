@@ -170,7 +170,9 @@ public final class MiddlewareCatalog {
             if (entry.getValue() == null) {
                 throw new CatalogLoadException(path + "." + key + " 不能为空");
             }
-            env.put(key, String.valueOf(entry.getValue()));
+            String rendered = String.valueOf(entry.getValue());
+            EnvPlaceholders.validate(rendered, path + "." + key);
+            env.put(key, rendered);
         }
         return env;
     }

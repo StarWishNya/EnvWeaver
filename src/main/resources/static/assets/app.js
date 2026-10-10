@@ -27,7 +27,6 @@ var ERROR_TYPES = [
   ['TIMEOUT', '超时'], ['CONFIG_ERROR', '配置错误'], ['UNKNOWN', '未知']
 ];
 var SEVERITIES = [['LOW', '低'], ['MEDIUM', '中'], ['HIGH', '高'], ['CRITICAL', '严重']];
-var DEPENDENCIES = ['mysql', 'redis', 'postgres', 'mongodb', 'rabbitmq', 'nginx'];
 var ACTIVE_TASK = { PENDING: 1, QUEUED: 1, RUNNING: 1 };
 var TERMINAL_TASK = { SUCCESS: 1, FAILED: 1, CANCELLED: 1 };
 
@@ -560,6 +559,10 @@ function buildCreateForm(gen, reload) {
       depText.value = '';
       template.selectedIndex = 0;
       form.querySelectorAll('input[name="dep"]').forEach(function (input) { input.checked = false; });
+      form.querySelectorAll('select[name="depVersion"]').forEach(function (select) {
+        var fallback = select.getAttribute('data-default');
+        if (fallback) select.value = fallback;
+      });
       showOk('任务已创建');
       return reload();
     }).catch(function (error) { if (!stale(gen)) report(error); })
@@ -595,20 +598,42 @@ function loadCreateCatalog(gen, templateSelect, checks, versionHint, templateHin
     var lines = [];
     kinds.forEach(function (kind) {
       if (!kind || typeof kind.kind !== 'string' || !kind.kind.trim()) return;
-      var name = kind.kind.trim();
-      boxes.push(add(el('label'), el('input', { type: 'checkbox', name: 'dep', value: name }), document.createTextNode(name)));
+      boxes.push(depChoice(kind));
       var line = formatKindHint(kind);
       if (line) lines.push(line);
     });
     if (boxes.length) checks.replaceChildren.apply(checks, boxes);
     versionHint.textContent = lines.length ? lines.join('；') : '目录里没有中间件';
   }).catch(function () {
-    if (stale(gen)) return;
-    DEPENDENCIES.forEach(function (name) {
-      checks.appendChild(add(el('label'), el('input', { type: 'checkbox', name: 'dep', value: name }), document.createTextNode(name)));
-    });
-    versionHint.textContent = '中间件版本加载失败，已使用内置列表';
+    if (!stale(gen)) versionHint.textContent = '中间件版本加载失败，请在下方手写依赖';
   });
+}
+
+function depChoice(kind) {
+  var name = kind.kind.trim();
+  var box = el('input', { type: 'checkbox', name: 'dep', value: name });
+  var versions = Array.isArray(kind.versions) ? kind.versions : [];
+  var fallback = kind.defaultVersion == null ? '' : String(kind.defaultVersion).trim();
+  var ids = [];
+  versions.forEach(function (version) {
+    if (!version || version.version == null || String(version.version).trim() === '') return;
+    ids.push(String(version.version).trim());
+  });
+  var preset = '';
+  for (var i = 0; i < ids.length; i += 1) {
+    if (ids[i] === fallback) { preset = ids[i]; break; }
+  }
+  if (!preset && ids.length) preset = ids[0];
+  var choice = add(el('div', { class: 'dep-choice' }), add(el('label'), box, text('span', name)));
+  if (!ids.length) return choice;
+  var options = ids.map(function (id) {
+    return [id, id === fallback ? id + '（默认）' : id];
+  });
+  var select = selectBox('depVersion', options, preset);
+  select.setAttribute('aria-label', name + ' 版本');
+  select.setAttribute('data-default', preset);
+  choice.appendChild(select);
+  return choice;
 }
 
 function formatKindHint(kind) {
@@ -646,7 +671,13 @@ function collectDeps(form) {
     seen[key] = true;
     list.push(tokenText);
   }
-  form.querySelectorAll('input[name="dep"]:checked').forEach(function (input) { addDep(input.value); });
+  form.querySelectorAll('input[name="dep"]:checked').forEach(function (input) {
+    var token = input.value;
+    var choice = input.closest('.dep-choice');
+    var select = choice ? choice.querySelector('select') : null;
+    if (select && String(select.value || '').trim() !== '') token = input.value + ':' + select.value;
+    addDep(token);
+  });
   form.querySelector('input[name="depText"]').value.split(/[,，;]+/).forEach(addDep);
   return list;
 }

@@ -71,7 +71,8 @@ class MiddlewareResolverTest {
         assertThat(failure.getCode()).isEqualTo(ErrorCode.VALIDATION_ERROR.getCode());
         assertThat(failure.getMessage()).contains("未知依赖: oracle").contains("mysql").contains("kafka");
         assertThat(data(failure).get("code")).isEqualTo(ResolveFailure.UNKNOWN_KIND);
-        assertThat(candidates(failure)).contains("mysql", "redis", "postgres", "mongodb", "nginx", "kafka")
+        assertThat(candidates(failure)).contains(
+                "mysql", "redis", "postgres", "mongodb", "rabbitmq", "nginx", "kafka")
                 .doesNotContain("oracle");
     }
 

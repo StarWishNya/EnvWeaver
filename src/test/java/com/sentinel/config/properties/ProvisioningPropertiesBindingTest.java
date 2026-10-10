@@ -71,12 +71,8 @@ class ProvisioningPropertiesBindingTest {
         assertThat(source.getProperty("sentinel.lifecycle.auto-diagnose")).isEqualTo(autoProvision);
         assertThat(source.getProperty("sentinel.provisioning.ttl")).isNotNull();
         assertThat(String.valueOf(source.getProperty("sentinel.provisioning.port-range"))).contains("30000");
-        assertThat(source.getProperty("sentinel.provisioning.dependencies.mysql.image")).isEqualTo("mysql:8.0");
-        assertThat(source.getProperty("sentinel.provisioning.dependencies.redis.image")).isEqualTo("redis:7-alpine");
-        assertThat(source.getProperty("sentinel.provisioning.dependencies.postgres.image")).isEqualTo("postgres:16-alpine");
-        assertThat(source.getProperty("sentinel.provisioning.dependencies.mongodb.image")).isEqualTo("mongo:7");
-        assertThat(source.getProperty("sentinel.provisioning.dependencies.rabbitmq.image")).isEqualTo("rabbitmq:3-management-alpine");
-        assertThat(source.getProperty("sentinel.provisioning.dependencies.nginx.image")).isEqualTo("nginx:alpine");
-        assertThat(source.getProperty("sentinel.provisioning.dependencies.mysql.env.MYSQL_DATABASE")).isEqualTo("test");
+        assertThat(source.getProperty("sentinel.provisioning.dependencies.mysql.image")).isNull();
+        assertThat(source.getProperty("sentinel.provisioning.dependencies.nginx.image")).isNull();
+        assertThat(source.getProperty("sentinel.provisioning.dependencies.rabbitmq.image")).isNull();
     }
 }

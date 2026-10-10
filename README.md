@@ -315,13 +315,13 @@ BASE_URL=http://localhost:8080 bash scripts/ai-smoke-test.sh
 
 ## 中间件目录与环境模板
 
-运维维护的目录是 `src/main/resources/catalog/middleware.yaml`（`schemaVersion: 1` 加 `revision`）。每种中间件有 `defaultVersion` 和 `versions`。每个版本要有 `version`、`image`、`containerPort`，还可以写 `aliases`、`env`、`readiness`（目前只支持 `tcp`，可选 `startupGraceSeconds`）和 `resources`（`memoryMb`、`cpu`，只作提示，不改变容器限额）。
+运维维护的目录是 `src/main/resources/catalog/middleware.yaml`（`schemaVersion: 1` 加 `revision`）。每种中间件有 `defaultVersion` 和 `versions`。每个版本要有 `version`、`image`、`containerPort`，还可以写 `aliases`、`env`、`readiness`（目前只支持 `tcp`，可选 `startupGraceSeconds`）和 `resources`（`memoryMb`、`cpu`，只作提示，不改变容器限额）。`env` 的值可以写 `${HOST}`（`sentinel.provisioning.host`）和 `${HOST_PORT}`（该容器分到的主机端口）。供给器在分配端口之后、启动容器之前替换。其它 `${...}` 会让目录加载失败。Kafka 的对外地址是 `PLAINTEXT://${HOST}:${HOST_PORT}`，容器内仍监听 9092，发布映射是 `主机端口:9092`。
 
 启动时加载。缺镜像或端口、版本或别名重复、默认版本不在 `versions` 里、模板依赖无法解析，应用都起不来。
 
 记号 `mysql` 用默认版本，`mysql:8` 走别名，`mysql:5.7` 用该版本。未知种类或版本返回 HTTP 400（业务码 5004），`message` 和 `data.candidates` 列出可选项。`GET /api/catalog/middleware` 与 `GET /api/catalog/templates` 需要登录，任何角色都可以读。目录接口不返回环境变量。
 
-`sentinel.provisioning.dependencies.<kind>` 覆盖该种类的**默认版本**（不写版本，或写的就是默认版本 / 它的别名）。显式的非默认版本仍用目录里的镜像和端口。目录中没有的种类可以在这里新增，但必须同时给出 `image` 和 `port`。
+发行配置不再内置一份依赖镜像。`sentinel.provisioning.dependencies.<kind>` 仍是运维逃生口：覆盖该种类的**默认版本**（不写版本，或写的就是默认版本 / 它的别名）。显式的非默认版本仍用目录里的镜像和端口。目录中没有的种类可以在这里新增，但必须同时给出 `image` 和 `port`。
 
 新增一种中间件：在 `kinds` 下加一块，写好默认版本和至少一个版本，重启。要让创建任务时能勾选组合，再在 `src/main/resources/catalog/templates.yaml` 加一项，字段是 `name`、`displayName`（中文）、`description`、`dependencies`。同一种类在一条模板里只能出现一次，依赖必须能在中间件目录里解析。
 
