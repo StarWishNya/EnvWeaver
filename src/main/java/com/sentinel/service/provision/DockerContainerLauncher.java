@@ -80,7 +80,7 @@ public class DockerContainerLauncher implements ContainerLauncher {
         }
         ExposedPort exposedPort = ExposedPort.tcp(launch.containerPort());
         Ports portBindings = new Ports();
-        portBindings.bind(exposedPort, Ports.Binding.bindPort(launch.hostPort()));
+        portBindings.bind(exposedPort, Ports.Binding.bindIpAndPort(provisioningProperties.getBindAddress(), launch.hostPort()));
 
         CreateContainerCmd create = dockerClient.createContainerCmd(launch.image())
                 .withName(launch.name())

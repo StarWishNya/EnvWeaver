@@ -47,6 +47,11 @@ public class ProvisioningProperties {
     private String host = "localhost";
 
     /**
+     * 容器端口发布到宿主机的监听地址，默认 127.0.0.1。环境内的数据库使用固定弱口令，改成 0.0.0.0 会暴露到外网。
+     */
+    private String bindAddress = "127.0.0.1";
+
+    /**
      * 按依赖名覆盖镜像、端口和环境变量。键不区分大小写。
      */
     private Map<String, Dependency> dependencies = new LinkedHashMap<>();

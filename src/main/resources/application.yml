@@ -218,6 +218,8 @@ sentinel:
     pull-timeout: 5m
     ready-timeout: 90s
     host: localhost
+    # 容器端口只发布到本机，环境内数据库为固定弱口令
+    bind-address: ${SENTINEL_PROVISIONING_BIND_ADDRESS:127.0.0.1}
     dependencies:
       mysql:
         image: mysql:8.0

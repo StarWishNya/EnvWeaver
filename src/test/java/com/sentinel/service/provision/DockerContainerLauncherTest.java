@@ -208,6 +208,7 @@ class DockerContainerLauncherTest {
         Ports.Binding[] bindings = hostConfig.getValue().getPortBindings().getBindings().get(ExposedPort.tcp(3306));
         assertThat(bindings).isNotEmpty();
         assertThat(bindings[0].getHostPortSpec()).isEqualTo("33061");
+        assertThat(bindings[0].getHostIp()).isEqualTo("127.0.0.1");
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, String>> labels = ArgumentCaptor.forClass(Map.class);
