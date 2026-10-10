@@ -2,40 +2,81 @@ openapi: 3.0.3
 info:
   title: Sentinel API
   description: |
-    Sentinel 智能体系统 API 接口规范
-    
-    ## 架构说明
-    - 单体 Spring Boot 应用
-    - 15 个核心 API 接口
-    - JWT Bearer 认证
-    
-    ## 设计原则
-    - RESTful 风格
-    - 统一响应格式
-    - 精简 MVP 范围
+    Sentinel 智能测试环境管理系统的 HTTP API。路径与 `server.servlet.context-path`（`/`）下的控制器映射一致。
+
+    成功时 HTTP 状态与正文 `code` 可以不同：创建任务的 HTTP 状态是 201，请求诊断是 202，正文 `code` 仍是 200。
+
+    业务异常的 HTTP 映射（`GlobalExceptionHandler.resolveHttpStatus`）：
+    - 1001–1007：401
+    - 1008：403
+    - 2001、3001、4002、5005：404
+    - 5003：503
+    - 其余业务码：400
+
+    未捕获异常：HTTP 500，`code` 5000，`message` 为「系统错误」。
+    参数校验失败：HTTP 400，`code` 5004，`data` 为字段名到消息的映射。
+    请求体不是 JSON：HTTP 400，`code` 5004，`message` 为「请求体格式错误」。
+    缺少必填头或查询参数、路径参数类型不匹配：HTTP 400，`code` 5004，`message` 为「请求参数错误」。
+    Content-Type 不被接受：HTTP 415，`code` 5004。
+    路径存在但方法不匹配：HTTP 405，`code` 5007。
+    唯一约束冲突：HTTP 400，`code` 5006。
+    安全过滤器拒绝未认证请求时，正文只有 `code`、`message`、`data`（没有 `timestamp` 和 `fromCache`）。
+
+    业务码（`ErrorCode`）：
+    - 1001 未授权，请先登录
+    - 1002 Token 已过期
+    - 1003 Token 无效
+    - 1004 Token 已被加入黑名单
+    - 1005 账户已被锁定
+    - 1006 账户已被禁用
+    - 1007 用户名或密码错误
+    - 1008 权限不足
+    - 2001 任务不存在
+    - 2002 任务创建失败
+    - 2003 任务取消失败
+    - 2004 任务状态无效
+    - 2005 任务已在运行中
+    - 3001 环境不存在
+    - 3002 环境创建失败
+    - 3003 环境释放失败
+    - 3004 环境不可用
+    - 3005 环境正忙
+    - 4001 诊断失败
+    - 4002 诊断结果不存在
+    - 4003 AI 服务不可用
+    - 4004 AI 服务超时
+    - 5000 系统错误
+    - 5001 数据库错误
+    - 5002 Redis 错误
+    - 5003 Docker 错误
+    - 5004 参数校验失败
+    - 5005 资源不存在
+    - 5006 资源已存在
+    - 5007 操作不允许
   version: 1.0.0
   contact:
     name: Sentinel Team
 
 servers:
-  - url: http://localhost:8080/api
-    description: 开发环境
+  - url: http://localhost:8080
+    description: 开发环境。`server.port` 默认 8080（可用 SERVER_PORT 覆盖），context-path 为 /。
 
 tags:
   - name: Auth
-    description: 认证接口
+    description: 用户登录、登出与当前用户
   - name: Task
-    description: 任务管理
+    description: 任务的创建、查询、取消与状态更新
   - name: Environment
-    description: 环境管理
+    description: 环境查询与释放
   - name: Metrics
-    description: 监控指标
+    description: 系统资源指标与依赖健康检查
+  - name: Health
+    description: 应用健康检查
   - name: Diagnosis
-    description: AI 诊断
+    description: 提交并查询任务诊断结果
+  - name: Error
+    description: 容器错误转发
 
-# ============================================================
-# 安全定义
-# ============================================================
 security:
   - bearerAuth: []
 
@@ -45,85 +86,181 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+      description: "请求头 Authorization: Bearer <accessToken>。除登录、两处健康检查和 /error 外都需要。"
 
-  # ============================================================
-  # 通用响应格式
-  # ============================================================
+  parameters:
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      description: 任务 ID
+      schema:
+        type: integer
+        format: int64
+    NumericTaskId:
+      name: taskId
+      in: path
+      required: true
+      description: 任务 ID。控制器路径模板为 `{taskId:[0-9]+}`，只匹配非负整数字面量，避免与 `/api/tasks/status/{status}` 冲突。
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+    EnvId:
+      name: envId
+      in: path
+      required: true
+      description: 环境 ID
+      schema:
+        type: integer
+        format: int64
+
+  responses:
+    Unauthorized:
+      description: |
+        未认证。安全过滤器返回 HTTP 401，正文只有 code=1001、message、data。
+        控制器抛出的认证类业务异常也是 HTTP 401（业务码 1001–1007），正文为完整 ApiResponse。
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/SecurityErrorBody'
+              - $ref: '#/components/schemas/ApiResponse'
+    BadRequest:
+      description: |
+        HTTP 400。方法参数校验失败时 code=5004，data 为字段错误映射。
+        业务异常（除 401/403/404/503 映射外）同样是 HTTP 400，data 为 null。
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/ApiValidationError'
+              - $ref: '#/components/schemas/ApiResponse'
+    Forbidden:
+      description: 权限不足。HTTP 403，code=1008，message 为「权限不足」。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'
+    NotFound:
+      description: 资源不存在。HTTP 404。任务 2001，环境 3001，诊断 4002，其它资源 5005。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'
+    ServiceUnavailable:
+      description: Docker 业务错误。HTTP 503，code=5003。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'
+
   schemas:
-    # 统一响应格式
     ApiResponse:
       type: object
+      description: 统一响应。`ApiResponse` 构造时写入 timestamp，fromCache 默认为 false。
+      required:
+        - code
+        - message
+        - timestamp
+        - fromCache
       properties:
         code:
           type: integer
-          description: 业务状态码
+          description: 业务码。成功为 200，与 HTTP 状态无关。
           example: 200
         message:
           type: string
-          description: 响应消息
+          description: 响应消息。无数据的成功默认为 success。
           example: success
         data:
-          type: object
-          description: 响应数据
+          nullable: true
+          description: 响应数据。失败时多为 null。
         timestamp:
-          type: integer
-          format: int64
-          description: 时间戳
-          example: 1702700000000
+          type: string
+          format: date-time
+          description: 本地日期时间，无时区偏移（Jackson 默认的 LocalDateTime）。
+          example: "2026-10-10T03:33:00"
+        fromCache:
+          type: boolean
+          description: 是否来自缓存。诊断接口会按受理结果改写，其它接口为 false。
+          default: false
+          example: false
 
-    # 分页响应
+    SecurityErrorBody:
+      type: object
+      description: 安全过滤器 authenticationEntryPoint 写出的 JSON，不含 timestamp 与 fromCache。
+      required:
+        - code
+        - message
+        - data
+      properties:
+        code:
+          type: integer
+          example: 1001
+        message:
+          type: string
+          example: 未授权，请先登录
+        data:
+          nullable: true
+          example: null
+
+    FieldErrors:
+      type: object
+      description: 校验失败时的 data。键是字段名，值是约束消息。
+      additionalProperties:
+        type: string
+      example:
+        taskCode: 任务编码不能为空
+
+    ApiValidationError:
+      allOf:
+        - $ref: '#/components/schemas/ApiResponse'
+        - type: object
+          properties:
+            code:
+              type: integer
+              example: 5004
+            message:
+              type: string
+              example: 参数校验失败
+            data:
+              $ref: '#/components/schemas/FieldErrors'
+
     PageResponse:
       type: object
+      description: |
+        分页数据，作为 ApiResponse.data。本接口的 content 元素是 TaskResponse。
+        totalElements 不大于 0 时 totalPages 为 0。
+      required:
+        - content
+        - page
+        - size
+        - totalElements
+        - totalPages
       properties:
-        code:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskResponse'
+        page:
           type: integer
-          example: 200
-        message:
-          type: string
-          example: success
-        data:
-          type: object
-          properties:
-            content:
-              type: array
-              items: {}
-            page:
-              type: integer
-              example: 0
-            size:
-              type: integer
-              example: 20
-            totalElements:
-              type: integer
-              example: 100
-            totalPages:
-              type: integer
-              example: 5
-
-    # ============================================================
-    # 错误码定义
-    # ============================================================
-    ErrorResponse:
-      type: object
-      properties:
-        code:
+          minimum: 0
+          description: 从 0 开始的页码
+          example: 0
+        size:
           type: integer
-          description: 错误码
-        message:
-          type: string
-          description: 错误消息
-        details:
-          type: string
-          description: 详细信息
-        timestamp:
+          description: 请求的每页大小
+          example: 20
+        totalElements:
           type: integer
           format: int64
+          example: 100
+        totalPages:
+          type: integer
+          format: int64
+          example: 5
 
-    # ============================================================
-    # 业务模型
-    # ============================================================
-    
-    # 登录请求
     LoginRequest:
       type: object
       required:
@@ -132,17 +269,14 @@ components:
       properties:
         username:
           type: string
-          minLength: 3
-          maxLength: 50
+          description: 用户名，不能为空白
           example: admin
         password:
           type: string
-          minLength: 6
-          maxLength: 100
           format: password
+          description: 密码，不能为空白
           example: "******"
 
-    # 登录响应
     LoginResponse:
       type: object
       properties:
@@ -151,18 +285,27 @@ components:
           description: JWT 访问令牌
         refreshToken:
           type: string
-          description: 刷新令牌
-        expiresIn:
-          type: integer
-          description: 过期时间(秒)
-          example: 7200
+          description: 刷新令牌。当前没有单独的刷新接口。
         tokenType:
           type: string
+          description: 令牌类型
+          default: Bearer
           example: Bearer
+        expiresIn:
+          type: integer
+          format: int64
+          description: 访问令牌有效期，单位秒（配置的毫秒值除以 1000）
+          example: 86400
+        username:
+          type: string
+          description: 用户名
+          example: admin
+        role:
+          $ref: '#/components/schemas/Role'
 
-    # 用户信息
     UserInfo:
       type: object
+      description: 当前登录用户的公开字段，不含密码。
       properties:
         id:
           type: integer
@@ -171,58 +314,35 @@ components:
           type: string
         email:
           type: string
+          nullable: true
         role:
-          type: string
-          enum: [ADMIN, USER]
+          $ref: '#/components/schemas/Role'
 
-    # 任务
-    Task:
-      type: object
-      properties:
-        id:
-          type: integer
-          format: int64
-        taskCode:
-          type: string
-          description: 任务编码(如 build-1234)
-          example: "build-1234"
-        serviceId:
-          type: string
-          description: 服务标识(如 user-service)
-          example: "user-service"
-        testType:
-          type: string
-          enum: [UNIT_TEST, INTEGRATION_TEST, E2E_TEST]
-          description: 测试类型
-        dependencies:
-          type: array
-          items:
-            type: string
-          description: 依赖列表
-        status:
-          type: string
-          enum: [PENDING, QUEUED, RUNNING, SUCCESS, FAILED, CANCELLED]
-        priority:
-          type: integer
-          minimum: 1
-          maximum: 10
-          example: 5
-        environmentId:
-          type: integer
-          format: int64
-        createdAt:
-          type: string
-          format: date-time
-        startedAt:
-          type: string
-          format: date-time
-        completedAt:
-          type: string
-          format: date-time
-        errorMessage:
-          type: string
+    Role:
+      type: string
+      enum:
+        - ADMIN
+        - USER
 
-    # 创建任务请求
+    TaskStatus:
+      type: string
+      description: 任务状态。PENDING、QUEUED、RUNNING、SUCCESS、FAILED、CANCELLED。
+      enum:
+        - PENDING
+        - QUEUED
+        - RUNNING
+        - SUCCESS
+        - FAILED
+        - CANCELLED
+
+    TestType:
+      type: string
+      description: 测试类型。
+      enum:
+        - UNIT_TEST
+        - INTEGRATION_TEST
+        - E2E_TEST
+
     CreateTaskRequest:
       type: object
       required:
@@ -234,49 +354,152 @@ components:
           type: string
           minLength: 1
           maxLength: 64
-          description: 任务编码(如 build-1234)
-          example: "build-1234"
+          description: 任务编码，不能为空白
+          example: build-1234
         serviceId:
           type: string
           minLength: 1
           maxLength: 64
-          description: 服务标识(如 user-service)
-          example: "user-service"
+          description: 服务标识，不能为空白
+          example: user-service
         testType:
-          type: string
-          enum: [UNIT_TEST, INTEGRATION_TEST, E2E_TEST]
-          description: 测试类型
+          allOf:
+            - $ref: '#/components/schemas/TestType'
+          maxLength: 32
         dependencies:
           type: array
+          description: 依赖列表，例如 mysql:8.0。不传则不写入依赖。
           items:
             type: string
-          description: 依赖列表
-          example: ["mysql:8.0", "redis:7.0"]
+          example:
+            - mysql:8.0
+            - redis:7.0
         priority:
           type: integer
           minimum: 1
           maximum: 10
-          default: 5
+          description: 优先级 1–10，数字越大越高。不传时服务端按 5 处理。
+          example: 5
 
-    # 资源限制
-    ResourceLimits:
+    TaskResponse:
+      type: object
+      description: 任务。dependencies 在库中是 JSON 字符串，响应中为字符串数组；空或无法解析时为空数组。
+      properties:
+        id:
+          type: integer
+          format: int64
+        taskCode:
+          type: string
+        serviceId:
+          type: string
+        testType:
+          $ref: '#/components/schemas/TestType'
+        dependencies:
+          type: array
+          items:
+            type: string
+        status:
+          $ref: '#/components/schemas/TaskStatus'
+        priority:
+          type: integer
+          minimum: 1
+          maximum: 10
+          nullable: true
+        environmentId:
+          type: integer
+          format: int64
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 进入 RUNNING 时写入
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 进入 SUCCESS、FAILED 或 CANCELLED 时写入
+        errorMessage:
+          type: string
+          nullable: true
+
+    TaskStatusResponse:
       type: object
       properties:
-        cpuLimit:
-          type: string
-          example: "2.0"
-          description: CPU 核心数
-        memoryLimit:
-          type: string
-          example: "2048m"
-          description: 内存限制
-        diskLimit:
-          type: string
-          example: "10g"
-          description: 磁盘限制
+        taskId:
+          type: integer
+          format: int64
+        status:
+          $ref: '#/components/schemas/TaskStatus'
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: |
+            没有进度列，按状态估算：PENDING 0，QUEUED 10，RUNNING 50，
+            SUCCESS、FAILED、CANCELLED 为 100，未知状态为 0。
 
-    # 环境
-    Environment:
+    TaskLogsResponse:
+      type: object
+      properties:
+        logs:
+          type: string
+          description: 环境容器日志。没有容器时回退为任务自身信息。
+        hasMore:
+          type: boolean
+          description: 任一容器返回的行数达到 tail 时为 true。
+
+    EnvironmentStatus:
+      type: string
+      description: |
+        环境状态。RETAINED 表示任务失败后环境保留到 expiresAt，供排查。
+        列表过滤区分大小写，空白表示不过滤，其它值 HTTP 400（code 5004）。
+      enum:
+        - CREATING
+        - READY
+        - BUSY
+        - RELEASING
+        - IDLE
+        - ERROR
+        - RETAINED
+
+    ResourceUsage:
+      type: object
+      nullable: true
+      description: |
+        资源使用。采集器写入 cpu（核数，最多 3 位小数）、memory（MiB 整数）和 sampledAt
+        （ISO-8601 本地时间，无时区偏移）。cpu 或 memory 不是有限数字时该字段为 null，对象仍保留。
+        sampledAt 不是字符串时省略。其它数字字段保留，非数字字段忽略。无法解析整段 JSON 时为 null。
+      properties:
+        cpu:
+          type: number
+          format: double
+          nullable: true
+          description: CPU 核数
+          example: 0.5
+        memory:
+          type: integer
+          format: int64
+          nullable: true
+          description: 内存，单位 MiB
+          example: 512
+        sampledAt:
+          type: string
+          description: 采集时间，ISO-8601 本地时间
+          example: "2026-10-10T03:33:00"
+      additionalProperties:
+        type: number
+        description: 未声明的数字字段
+      example:
+        cpu: 0.5
+        memory: 512
+        sampledAt: "2026-10-10T03:33:00"
+
+    EnvironmentDTO:
       type: object
       properties:
         id:
@@ -284,46 +507,46 @@ components:
           format: int64
         envCode:
           type: string
-          description: 环境编码(如 env-abc123)
-          example: "env-abc123"
+          description: 环境编码
+          example: env-abc123
         status:
-          type: string
-          enum: [CREATING, READY, BUSY, RELEASING, IDLE, ERROR]
-          description: "状态: CREATING-创建中, READY-就绪, BUSY-使用中, RELEASING-释放中, IDLE-空闲, ERROR-错误"
+          $ref: '#/components/schemas/EnvironmentStatus'
         taskId:
           type: integer
           format: int64
+          nullable: true
         composeContent:
           type: string
+          nullable: true
           description: 生成的 docker-compose.yml 内容
         accessUrl:
           type: string
+          nullable: true
           description: 访问地址
         portMappings:
           type: object
+          nullable: true
+          description: 端口映射，例如 mysql → 33061。无法解析时为 null。
           additionalProperties:
             type: integer
-          description: 端口映射
-          example: {"mysql": 33061, "redis": 63791}
+          example:
+            mysql: 33061
+            redis: 63791
         resourceUsage:
-          type: object
-          properties:
-            cpu:
-              type: number
-            memory:
-              type: integer
-          description: 资源使用情况
+          $ref: '#/components/schemas/ResourceUsage'
         expiresAt:
           type: string
           format: date-time
-          description: 过期时间(用于自动回收)
+          nullable: true
+          description: 过期时间，用于自动回收。RETAINED 环境保留到该时刻。
         createdAt:
           type: string
           format: date-time
+          nullable: true
 
-    # 系统指标
     SystemMetrics:
       type: object
+      description: 系统资源指标。采集失败时用哨兵值，不把异常返回给客户端。
       properties:
         timestamp:
           type: string
@@ -334,26 +557,26 @@ components:
             usage:
               type: number
               format: double
-              description: CPU 使用率 (0-100)
+              description: CPU 使用率 0–100。采集不到时为 -1。
             cores:
               type: integer
+              description: 可用核数。采集不到时为 0。
         memory:
           type: object
+          description: 物理内存，单位字节。usage 为 0–100。
           properties:
             used:
               type: integer
               format: int64
-              description: 已用内存 (bytes)
             total:
               type: integer
               format: int64
-              description: 总内存 (bytes)
             usage:
               type: number
               format: double
-              description: 内存使用率 (0-100)
         disk:
           type: object
+          description: 工作目录所在文件系统，单位字节。usage 为 0–100。
           properties:
             used:
               type: integer
@@ -366,6 +589,7 @@ components:
               format: double
         containers:
           type: object
+          description: Docker 容器数量。采集失败时三项都为 0。
           properties:
             running:
               type: integer
@@ -374,9 +598,119 @@ components:
             stopped:
               type: integer
 
-    # AI 诊断结果
+    UpDown:
+      type: string
+      enum:
+        - UP
+        - DOWN
+
+    HealthComponents:
+      type: object
+      description: 各依赖状态，只有 UP 或 DOWN，不带异常信息。
+      properties:
+        db:
+          $ref: '#/components/schemas/UpDown'
+        redis:
+          $ref: '#/components/schemas/UpDown'
+        docker:
+          $ref: '#/components/schemas/UpDown'
+
+    ComponentHealth:
+      type: object
+      description: |
+        `/api/metrics/health` 的正文，不包在 ApiResponse 里。
+        db、redis、docker 全部为 UP 时 status 为 UP，否则为 DOWN。
+      properties:
+        status:
+          $ref: '#/components/schemas/UpDown'
+        components:
+          $ref: '#/components/schemas/HealthComponents'
+
+    ApplicationHealth:
+      type: object
+      description: |
+        `/api/health` 的正文，不包在 ApiResponse 里。
+        db 或 redis 不是 UP 时 status 为 DOWN 且 HTTP 503。
+        仅 docker 为 DOWN 时 status 仍为 UP，HTTP 200。
+      properties:
+        status:
+          $ref: '#/components/schemas/UpDown'
+        timestamp:
+          type: string
+          format: date-time
+        application:
+          type: string
+          example: Sentinel
+        version:
+          type: string
+          example: 1.0.0-SNAPSHOT
+        components:
+          $ref: '#/components/schemas/HealthComponents'
+
+    DiagnosisErrorType:
+      type: string
+      enum:
+        - RESOURCE_EXHAUSTED
+        - NETWORK_ERROR
+        - DEPENDENCY_FAILURE
+        - TIMEOUT
+        - CONFIG_ERROR
+        - UNKNOWN
+
+    DiagnosisSeverity:
+      type: string
+      enum:
+        - LOW
+        - MEDIUM
+        - HIGH
+        - CRITICAL
+
+    DiagnosisAcceptedStatus:
+      type: string
+      description: 受理时刻的状态。缓存命中为 COMPLETED，新受理为 PROCESSING，复用进行中的任务时可为 PENDING 或 PROCESSING。
+      enum:
+        - PENDING
+        - PROCESSING
+        - COMPLETED
+
+    DiagnosisResultStatus:
+      type: string
+      description: 诊断记录状态。
+      enum:
+        - PENDING
+        - PROCESSING
+        - COMPLETED
+        - FAILED
+
+    DiagnosisRequest:
+      type: object
+      description: 字段都可选。不传 body 时按任务错误信息和容器日志诊断。
+      properties:
+        forceRefresh:
+          type: boolean
+          description: 为 true 时忽略相同日志哈希的缓存，重新调用 AI。缺省或非 true 视为 false。
+          default: false
+        log:
+          type: string
+          description: 直接作为诊断输入。有内容时不再拼接任务错误信息和容器日志。
+
+    DiagnosisAcceptedResponse:
+      type: object
+      description: HTTP 202 的 data 只有这两个字段。是否命中缓存写在外层 ApiResponse.fromCache。
+      properties:
+        diagnosisId:
+          type: integer
+          format: int64
+          description: 命中诊断缓存时为该行主键，否则为预先生成的正整数。
+        status:
+          $ref: '#/components/schemas/DiagnosisAcceptedStatus'
+
     DiagnosisResult:
       type: object
+      description: |
+        任务诊断结果。类上 NON_NULL 会省略空字段；confidence 始终写出，没有置信度时为 null。
+        data.fromCache 与外层 ApiResponse.fromCache 相同。
+        非 COMPLETED 时不填 errorType、severity、summary、rootCause、suggestions。
       properties:
         id:
           type: integer
@@ -385,46 +719,50 @@ components:
           type: integer
           format: int64
         errorType:
-          type: string
-          enum: [RESOURCE_EXHAUSTED, NETWORK_ERROR, DEPENDENCY_FAILURE, TIMEOUT, CONFIG_ERROR, UNKNOWN]
+          $ref: '#/components/schemas/DiagnosisErrorType'
         severity:
-          type: string
-          enum: [LOW, MEDIUM, HIGH, CRITICAL]
+          $ref: '#/components/schemas/DiagnosisSeverity'
         summary:
           type: string
-          description: 问题摘要
         rootCause:
           type: string
-          description: 根因分析
         suggestions:
           type: array
           items:
             type: string
-          description: 修复建议
         confidence:
           type: number
           format: double
+          nullable: true
           minimum: 0
           maximum: 1
-          description: 置信度
+          description: 0 到 1。模型没有给出置信度时为 null，不写成 0。该字段始终出现在 JSON 里。
         fromCache:
           type: boolean
-          description: 是否来自缓存
+          description: 是否复用了已有诊断，而不是本次新调用模型。
+        status:
+          $ref: '#/components/schemas/DiagnosisResultStatus'
+        provider:
+          type: string
+          nullable: true
+        model:
+          type: string
+          nullable: true
+        error:
+          type: string
+          nullable: true
+          description: status 为 FAILED 时的错误说明。
         createdAt:
           type: string
           format: date-time
+          nullable: true
 
-# ============================================================
-# API 路径定义 (15 个核心接口)
-# ============================================================
 paths:
-  # ============================================================
-  # 1. 认证接口 (2个)
-  # ============================================================
-  /auth/login:
+  /api/auth/login:
     post:
       tags: [Auth]
       summary: 用户登录
+      description: 使用用户名和密码登录。匿名可访问。失败时 HTTP 401，code 为 1007（用户名或密码错误）或 1005（账户已被锁定）。
       operationId: login
       security: []
       requestBody:
@@ -435,7 +773,7 @@ paths:
               $ref: '#/components/schemas/LoginRequest'
       responses:
         '200':
-          description: 登录成功
+          description: 登录成功。message 为 success。
           content:
             application/json:
               schema:
@@ -445,18 +783,52 @@ paths:
                     properties:
                       data:
                         $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
-          description: 认证失败
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/auth/logout:
+    post:
+      tags: [Auth]
+      summary: 用户登出
+      description: 去掉 Authorization 中的 "Bearer " 前缀后，按令牌剩余寿命加入黑名单。成功时 message 为「登出成功」，data 为 null。
+      operationId: logout
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          description: 访问令牌，格式为 Bearer <token>。没有该前缀时按原样处理。
+          schema:
+            type: string
+            example: Bearer eyJhbGciOiJIUzI1NiJ9.token
+      responses:
+        '200':
+          description: 登出成功
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      message:
+                        type: string
+                        example: 登出成功
+                      data:
+                        nullable: true
+                        example: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
 
-  /auth/me:
+  /api/auth/me:
     get:
       tags: [Auth]
       summary: 获取当前用户信息
-      operationId: getCurrentUser
+      description: 返回已认证用户的 id、用户名、邮箱和角色，不包含密码。
+      operationId: me
       responses:
         '200':
           description: 成功
@@ -469,57 +841,66 @@ paths:
                     properties:
                       data:
                         $ref: '#/components/schemas/UserInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
 
-  # ============================================================
-  # 2. 任务管理接口 (6个)
-  # ============================================================
-  /tasks:
+  /api/tasks:
     get:
       tags: [Task]
-      summary: 获取任务列表
+      summary: 分页查询任务列表
+      description: |
+        page 从 0 开始，size 默认 20，合法范围 1–500，大于 500 不会被截断。
+        status、testType 为空则不过滤；有值时必须是对应枚举，区分大小写。
       operationId: listTasks
       parameters:
-        - name: status
-          in: query
-          schema:
-            type: string
-            enum: [PENDING, QUEUED, RUNNING, SUCCESS, FAILED, CANCELLED]
-        - name: testType
-          in: query
-          schema:
-            type: string
-            enum: [UNIT_TEST, INTEGRATION_TEST, E2E_TEST]
         - name: page
           in: query
+          description: 页码，从 0 开始
           schema:
             type: integer
+            minimum: 0
             default: 0
         - name: size
           in: query
+          description: 每页大小，1 到 500
           schema:
             type: integer
+            minimum: 1
+            maximum: 500
             default: 20
+        - name: status
+          in: query
+          required: false
+          description: 任务状态。不传或空白表示不过滤。
+          schema:
+            $ref: '#/components/schemas/TaskStatus'
+        - name: testType
+          in: query
+          required: false
+          description: 测试类型。不传或空白表示不过滤。
+          schema:
+            $ref: '#/components/schemas/TestType'
       responses:
         '200':
-          description: 成功
+          description: 成功。data 为 PageResponse。
           content:
             application/json:
               schema:
                 allOf:
-                  - $ref: '#/components/schemas/PageResponse'
+                  - $ref: '#/components/schemas/ApiResponse'
                   - type: object
                     properties:
                       data:
-                        type: object
-                        properties:
-                          content:
-                            type: array
-                            items:
-                              $ref: '#/components/schemas/Task'
+                        $ref: '#/components/schemas/PageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
 
     post:
       tags: [Task]
       summary: 创建任务
+      description: 创建一个新的测试任务。HTTP 201，正文 code 仍为 200。初始状态为 PENDING。任务编码重复时 HTTP 400，code 5006。
       operationId: createTask
       requestBody:
         required: true
@@ -538,26 +919,25 @@ paths:
                   - type: object
                     properties:
                       data:
-                        $ref: '#/components/schemas/Task'
+                        $ref: '#/components/schemas/TaskResponse'
         '400':
-          description: 参数错误
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
 
-  /tasks/{taskId}:
+  /api/tasks/status/{status}:
     get:
       tags: [Task]
-      summary: 获取任务详情
-      operationId: getTask
+      summary: 根据状态查询任务
+      description: 查询指定状态的全部任务，不分页。服务按字符串精确查询，不额外校验枚举。
+      operationId: listTasksByStatus
       parameters:
-        - name: taskId
+        - name: status
           in: path
           required: true
+          description: 任务状态
           schema:
-            type: integer
-            format: int64
+            $ref: '#/components/schemas/TaskStatus'
       responses:
         '200':
           description: 成功
@@ -569,51 +949,77 @@ paths:
                   - type: object
                     properties:
                       data:
-                        $ref: '#/components/schemas/Task'
-        '404':
-          description: 任务不存在
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/TaskResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/tasks/{taskId}:
+    get:
+      tags: [Task]
+      summary: 获取任务详情
+      description: 根据任务 ID 获取任务。不存在时 HTTP 404，code 2001。路径不是整数时 HTTP 400。
+      operationId: getTask
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: 成功
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/TaskResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
     delete:
       tags: [Task]
       summary: 取消任务
-      operationId: cancelTask
+      description: 取消指定任务。成功时 message 为「任务已取消」，data 为 null。已是 SUCCESS、FAILED 或 CANCELLED 时 HTTP 400，code 5007。不存在时 HTTP 404，code 2001。
+      operationId: deleteTask
       parameters:
-        - name: taskId
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
+        - $ref: '#/components/parameters/TaskId'
       responses:
         '200':
           description: 取消成功
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ApiResponse'
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      message:
+                        type: string
+                        example: 任务已取消
+                      data:
+                        nullable: true
+                        example: null
         '400':
-          description: 任务状态不允许取消
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
-  /tasks/{taskId}/status:
+  /api/tasks/{taskId}/status:
     get:
       tags: [Task]
       summary: 获取任务状态
+      description: 返回任务状态和按状态估算的进度。路径只匹配数字 ID。
       operationId: getTaskStatus
       parameters:
-        - name: taskId
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
+        - $ref: '#/components/parameters/NumericTaskId'
       responses:
         '200':
           description: 成功
@@ -625,39 +1031,73 @@ paths:
                   - type: object
                     properties:
                       data:
-                        type: object
-                        properties:
-                          taskId:
-                            type: integer
-                            format: int64
-                          status:
-                            type: string
-                          progress:
-                            type: integer
-                            minimum: 0
-                            maximum: 100
+                        $ref: '#/components/schemas/TaskStatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
-  /tasks/{taskId}/logs:
+    put:
+      tags: [Task]
+      summary: 更新任务状态
+      description: |
+        仅管理员（角色 ADMIN）。新状态必须是任务状态枚举，区分大小写。
+        状态未变化时不写库。成功时 message 为「任务状态已更新」，data 为 null。
+        非法状态 HTTP 400，code 2004。非管理员 HTTP 403，code 1008。任务不存在 HTTP 404，code 2001。
+      operationId: updateTaskStatus
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - name: status
+          in: query
+          required: true
+          description: 新状态
+          schema:
+            $ref: '#/components/schemas/TaskStatus'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      message:
+                        type: string
+                        example: 任务状态已更新
+                      data:
+                        nullable: true
+                        example: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/tasks/{taskId}/logs:
     get:
       tags: [Task]
       summary: 获取任务日志
+      description: 返回环境容器日志。tail 合法范围 1–5000。since 支持带偏移的 ISO-8601，以及无时区的本地日期时间。
       operationId: getTaskLogs
       parameters:
-        - name: taskId
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
+        - $ref: '#/components/parameters/NumericTaskId'
         - name: tail
           in: query
           description: 返回最后 N 行
           schema:
             type: integer
+            minimum: 1
+            maximum: 5000
             default: 100
         - name: since
           in: query
-          description: 从指定时间开始
+          required: false
+          description: 从该时间开始。空白视为未传。非法格式 HTTP 400，code 5004。
           schema:
             type: string
             format: date-time
@@ -672,27 +1112,59 @@ paths:
                   - type: object
                     properties:
                       data:
-                        type: object
-                        properties:
-                          logs:
-                            type: string
-                          hasMore:
-                            type: boolean
+                        $ref: '#/components/schemas/TaskLogsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
-  # ============================================================
-  # 3. 环境管理接口 (3个)
-  # ============================================================
-  /environments:
+  /api/tasks/{taskId}/cancel:
+    post:
+      tags: [Task]
+      summary: 取消任务（已废弃）
+      description: 与 DELETE /api/tasks/{taskId} 行为相同。请改用 DELETE。
+      operationId: cancelTask
+      deprecated: true
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: 取消成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      message:
+                        type: string
+                        example: 任务已取消
+                      data:
+                        nullable: true
+                        example: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/environments:
     get:
       tags: [Environment]
       summary: 获取环境列表
+      description: 按 id 倒序，最多 500 条。status 为空不过滤；非法状态 HTTP 400，code 5004。
       operationId: listEnvironments
       parameters:
         - name: status
           in: query
+          required: false
+          description: 环境状态。包含 RETAINED。
           schema:
-            type: string
-            enum: [CREATING, READY, BUSY, RELEASING, IDLE, ERROR]
+            $ref: '#/components/schemas/EnvironmentStatus'
       responses:
         '200':
           description: 成功
@@ -706,20 +1178,20 @@ paths:
                       data:
                         type: array
                         items:
-                          $ref: '#/components/schemas/Environment'
+                          $ref: '#/components/schemas/EnvironmentDTO'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
 
-  /environments/{envId}:
+  /api/environments/{envId}:
     get:
       tags: [Environment]
       summary: 获取环境详情
+      description: 根据环境 ID 获取环境信息。不存在时 HTTP 404，code 3001。
       operationId: getEnvironment
       parameters:
-        - name: envId
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
+        - $ref: '#/components/parameters/EnvId'
       responses:
         '200':
           description: 成功
@@ -731,35 +1203,53 @@ paths:
                   - type: object
                     properties:
                       data:
-                        $ref: '#/components/schemas/Environment'
+                        $ref: '#/components/schemas/EnvironmentDTO'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
-  /environments/{envId}/release:
+  /api/environments/{envId}/release:
     post:
       tags: [Environment]
       summary: 释放环境
+      description: |
+        停止并删除环境中的容器。全部成功则环境置为 IDLE，message 为 success，data 为 null。
+        已是 IDLE 或 RELEASING 时 HTTP 400，code 5007。
+        任一容器失败或 Docker 不可用时环境置为 ERROR，HTTP 503，code 5003。
+        ERROR 与 RETAINED 可以再次释放。不存在时 HTTP 404，code 3001。
       operationId: releaseEnvironment
       parameters:
-        - name: envId
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
+        - $ref: '#/components/parameters/EnvId'
       responses:
         '200':
           description: 释放成功
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ApiResponse'
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        nullable: true
+                        example: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
-  # ============================================================
-  # 4. 监控指标接口 (2个)
-  # ============================================================
-  /metrics:
+  /api/metrics:
     get:
       tags: [Metrics]
       summary: 获取系统指标
+      description: 返回 CPU、内存、磁盘和容器数量。data 为 SystemMetrics。需要认证。只产出 application/json。
       operationId: getSystemMetrics
       responses:
         '200':
@@ -773,92 +1263,73 @@ paths:
                     properties:
                       data:
                         $ref: '#/components/schemas/SystemMetrics'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
 
-  /metrics/health:
+  /api/metrics/health:
     get:
       tags: [Metrics]
       summary: 健康检查
-      operationId: healthCheck
+      description: |
+        匿名检查数据库、Redis 和 Docker。正文只有 status 和 components，不包 ApiResponse。
+        任一依赖不是 UP 时 HTTP 503，正文 status 为 DOWN。
+      operationId: metricsHealth
       security: []
       responses:
         '200':
-          description: 服务健康
+          description: 三项依赖都是 UP
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    example: UP
-                  components:
-                    type: object
-                    properties:
-                      db:
-                        type: string
-                        example: UP
-                      redis:
-                        type: string
-                        example: UP
-                      docker:
-                        type: string
-                        example: UP
+                $ref: '#/components/schemas/ComponentHealth'
+        '503':
+          description: 至少一项依赖不是 UP。正文仍是 ComponentHealth，不是 ApiResponse。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComponentHealth'
 
-  # ============================================================
-  # 5. AI 诊断接口 (2个)
-  # ============================================================
-  /diagnosis/{taskId}:
+  /api/health:
     get:
-      tags: [Diagnosis]
-      summary: 获取任务诊断结果
-      operationId: getDiagnosis
-      parameters:
-        - name: taskId
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
+      tags: [Health]
+      summary: 应用健康检查
+      description: |
+        匿名。正文为 status、timestamp、application、version、components，不包 ApiResponse。
+        数据库或 Redis 为 DOWN 时 HTTP 503 且 status 为 DOWN。仅 Docker 为 DOWN 时 HTTP 200 且 status 为 UP。
+      operationId: applicationHealth
+      security: []
       responses:
         '200':
-          description: 成功
+          description: 数据库和 Redis 都是 UP
           content:
             application/json:
               schema:
-                allOf:
-                  - $ref: '#/components/schemas/ApiResponse'
-                  - type: object
-                    properties:
-                      data:
-                        $ref: '#/components/schemas/DiagnosisResult'
-        '404':
-          description: 诊断结果不存在
+                $ref: '#/components/schemas/ApplicationHealth'
+        '503':
+          description: 数据库或 Redis 不是 UP。正文仍是 ApplicationHealth。
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/ApplicationHealth'
 
+  /api/diagnosis/{taskId}:
     post:
       tags: [Diagnosis]
       summary: 请求 AI 诊断
+      description: |
+        异步诊断任务日志。HTTP 202，正文 code 仍为 200。
+        data 只有 diagnosisId 和 status。是否来自缓存只写在外层 fromCache。
+        没有可诊断内容时 HTTP 400，code 5004。任务不存在 HTTP 404，code 2001。
+        诊断队列已满时 HTTP 400，code 4003（不会把 FAILED 放进 202 的 data）。
       operationId: requestDiagnosis
       parameters:
-        - name: taskId
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
+        - $ref: '#/components/parameters/TaskId'
       requestBody:
+        required: false
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                forceRefresh:
-                  type: boolean
-                  default: false
-                  description: 强制刷新，不使用缓存
+              $ref: '#/components/schemas/DiagnosisRequest'
       responses:
         '202':
           description: 诊断请求已接受
@@ -869,39 +1340,81 @@ paths:
                   - $ref: '#/components/schemas/ApiResponse'
                   - type: object
                     properties:
+                      fromCache:
+                        type: boolean
+                        description: 命中日志缓存时为 true
                       data:
-                        type: object
-                        properties:
-                          diagnosisId:
-                            type: integer
-                            format: int64
-                          status:
-                            type: string
-                            enum: [PENDING, PROCESSING, COMPLETED]
+                        $ref: '#/components/schemas/DiagnosisAcceptedResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
-# ============================================================
-# 错误码定义
-# ============================================================
-# 业务错误码规范:
-# - 1xxx: 认证相关
-# - 2xxx: 任务相关
-# - 3xxx: 环境相关
-# - 4xxx: AI 诊断相关
-# - 5xxx: 系统相关
-#
-# 错误码列表:
-# - 1001: 用户名或密码错误
-# - 1002: Token 已过期
-# - 1003: Token 无效
-# - 2001: 任务不存在
-# - 2002: 任务状态不允许该操作
-# - 2003: 任务创建失败
-# - 3001: 环境不存在
-# - 3002: 无可用环境
-# - 3003: 环境创建失败
-# - 4001: AI 服务不可用
-# - 4002: 诊断超时
-# - 4003: 诊断结果不存在
-# - 5001: 系统内部错误
-# - 5002: Docker 服务不可用
-# - 5003: 资源不足
+    get:
+      tags: [Diagnosis]
+      summary: 获取任务诊断结果
+      description: 返回最近一次诊断的状态和结果。没有受理记录时 HTTP 404，code 4002。外层 fromCache 与 data.fromCache 相同。
+      operationId: getDiagnosis
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      fromCache:
+                        type: boolean
+                      data:
+                        $ref: '#/components/schemas/DiagnosisResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /error:
+    get: &errorDispatch
+      tags: [Error]
+      summary: 容器错误转发
+      description: |
+        `ApiErrorController.error`。`@RequestMapping("/error")` 不限定 HTTP 方法。
+        HTTP 状态沿用转发前的状态码。正文是 ApiResponse，data 为 null。
+        404：code 5005，message「资源不存在」。
+        405：code 5007，message「不支持的请求方法」。
+        401：code 1001。403：code 1008。其它状态：code 5000，message「系统错误」。
+      operationId: errorGet
+      security: []
+      responses:
+        default:
+          description: 与转发前的 HTTP 状态一致
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+    head:
+      <<: *errorDispatch
+      operationId: errorHead
+    post:
+      <<: *errorDispatch
+      operationId: errorPost
+    put:
+      <<: *errorDispatch
+      operationId: errorPut
+    patch:
+      <<: *errorDispatch
+      operationId: errorPatch
+    delete:
+      <<: *errorDispatch
+      operationId: errorDelete
+    options:
+      <<: *errorDispatch
+      operationId: errorOptions
+    trace:
+      <<: *errorDispatch
+      operationId: errorTrace

@@ -4,7 +4,6 @@
 # 用途：本地开发环境快速启动 MySQL 和 Redis 服务
 # 使用方法：docker-compose up -d
 
-version: '3.8'
 
 services:
   # MySQL 8.0 数据库服务

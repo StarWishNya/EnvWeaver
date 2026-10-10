@@ -115,6 +115,3 @@ yarn-error.log*
 # Test output
 test-output/
 surefire-reports/
-
-# resources
-src/main/resources/

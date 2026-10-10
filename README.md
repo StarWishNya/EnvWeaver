@@ -29,11 +29,17 @@
 cp .env.example .env
 ```
 
-编辑 `.env` 文件。`JWT_SECRET` 为必填（至少 32 个字符），主配置不再提供默认值；其余项按示例填写：
+编辑 `.env` 文件。`JWT_SECRET` 为必填（至少 32 个字符），主配置不再提供默认值。Docker Compose 不会给 MySQL 或 Redis 填默认密码：`.env` 里必须有非空的 `MYSQL_ROOT_PASSWORD`、`MYSQL_PASSWORD`、`REDIS_PASSWORD`，否则容器拒绝启动。复制后把示例里的 `change_me_*` 都换成随机值：
 
 ```bash
-# 数据库配置
-DB_PASSWORD=root
+# Compose：MySQL / Redis / Ollama 只绑定 127.0.0.1。下面三项必填，没有默认密码
+MYSQL_ROOT_PASSWORD=your_mysql_root_password
+MYSQL_PASSWORD=your_mysql_user_password
+REDIS_PASSWORD=your_redis_password
+
+# 应用连接。开发配置默认用户名 root，DB_PASSWORD 需与 MYSQL_ROOT_PASSWORD 相同
+DB_USERNAME=root
+DB_PASSWORD=your_mysql_root_password
 
 # JWT 密钥（至少 32 个字符，必填）
 JWT_SECRET=your-super-secret-jwt-key-change-in-production
@@ -57,13 +63,16 @@ DEEPSEEK_API_KEY=your_deepseek_api_key
 docker-compose up -d
 ```
 
-服务信息：
-- **MySQL**: `localhost:3306`
-  - 数据库: `sentinel`
-  - 用户名: `root`
-  - 密码: `root`（可在 .env 中配置）
-- **Redis**: `localhost:6379`
-- **Ollama**: `localhost:11434`（可选）
+MySQL、Redis、Ollama 都只绑定 `127.0.0.1`（`BIND_ADDRESS` 可覆盖）。端口对应 `MYSQL_PORT`（默认 3306）、`REDIS_PORT`（默认 6379）、`OLLAMA_PORT`（默认 11434）。
+
+- **MySQL**: `127.0.0.1:3306`
+  - 数据库: `sentinel`（`MYSQL_DATABASE`，默认 `sentinel`）
+  - root 密码: `.env` 中的 `MYSQL_ROOT_PASSWORD`（必填；Compose 没有默认密码）
+  - 额外账号: `MYSQL_USER`（默认 `sentinel`），密码为 `MYSQL_PASSWORD`（必填）
+- **Redis**: `127.0.0.1:6379`，密码为 `REDIS_PASSWORD`（必填）
+- **Ollama**: `127.0.0.1:11434`（可选）
+
+应用使用 `DB_USERNAME`（开发配置默认 `root`）、`DB_PASSWORD` 和 `REDIS_PASSWORD`。`DB_PASSWORD` 必须与 `MYSQL_ROOT_PASSWORD` 相同。未设置时，`src/main/resources/application-dev.yml` 会把数据库密码回退成字面量 `root`、把 Redis 密码回退成空字符串；这两项都连不上当前 Compose。
 
 数据持久化：
 - MySQL 数据卷: `sentinel-mysql-data`
@@ -78,7 +87,7 @@ mvn clean package
 
 ### 4. 运行应用
 
-应用启动必须提供 `JWT_SECRET`（至少 32 个字符）。主配置不再内置默认密钥，可通过环境变量提供，或使用已被 `.gitignore` 忽略的 `.env` 文件（`cp .env.example .env` 后设置 `JWT_SECRET`；`application.yml` 会导入 `optional:file:.env[.properties]`）。
+应用启动必须提供 `JWT_SECRET`（至少 32 个字符）。主配置不再内置默认密钥，可通过环境变量提供，或使用已被 `.gitignore` 忽略的 `.env` 文件（`cp .env.example .env` 后设置 `JWT_SECRET`；`src/main/resources/application.yml` 会导入 `optional:file:.env[.properties]`）。
 
 ```bash
 # 开发环境（默认）
@@ -119,7 +128,7 @@ docker-compose down -v
 
 ## 运行测试
 
-先启动本机 MySQL 和 Redis，再执行测试，不必额外导出环境变量：
+Compose 里的 MySQL 和 Redis 只监听 `127.0.0.1`，并且依赖 `.env` 中的 `MYSQL_ROOT_PASSWORD`、`MYSQL_PASSWORD`、`REDIS_PASSWORD`（均无默认值）。写好这三项后再启动依赖并执行测试：
 
 ```bash
 docker compose up -d mysql redis
@@ -128,11 +137,9 @@ mvn -B -o clean test
 
 不使用离线模式时可以去掉 `-o`：`mvn -B clean test`。
 
-`src/test/resources/config/application-test.yml` 只覆盖测试 profile 的连接信息，默认指向：
+`src/test/resources/config/application-test.yml` 只覆盖测试 profile 的连接信息。未设置环境变量时，该文件回退到 MySQL `127.0.0.1:3306`、数据库 `sentinel`、用户名 `root`、密码字面量 `root`（`useSSL=false`），以及 Redis `127.0.0.1:6379`、空密码。这是测试配置的回退值，不是 Compose 的密码。对着本仓库的 Compose 跑测试时，把 `DB_PASSWORD` 设成与 `MYSQL_ROOT_PASSWORD` 相同，并设置同一个 `REDIS_PASSWORD`。这两个键如果已经写在仓库根 `.env`，会由 `src/main/resources/application.yml` 导入，不必再 export。
 
-- MySQL：`127.0.0.1:3306`，数据库 `sentinel`，用户名 `root`，密码 `root`（`useSSL=false`）
-- Redis：`127.0.0.1:6379`，无密码
-- 日志文件：`target/logs/sentinel-test.log`
+日志文件：`target/logs/sentinel-test.log`。
 
 可用环境变量覆盖：`DB_HOST`、`DB_PORT`、`DB_NAME`、`DB_USERNAME`、`DB_PASSWORD`、`REDIS_HOST`、`REDIS_PORT`、`REDIS_PASSWORD`、`JWT_SECRET`。未设置 `JWT_SECRET` 时，测试使用配置中内置的、长度不少于 32 的测试密钥。
 
@@ -160,7 +167,6 @@ BASE_URL=http://localhost:18080 bash scripts/smoke-test.sh
 
 ```
 src/main/java/com/sentinel/
-├── agent/          # 智能体核心模块
 ├── ai/             # 多提供商 AI 客户端与路由
 ├── config/         # 配置类
 ├── controller/     # 控制器层
@@ -168,7 +174,9 @@ src/main/java/com/sentinel/
 ├── dto/            # 数据传输对象
 ├── enums/          # 枚举类
 ├── event/          # Spring 事件
+├── lifecycle/      # 任务生命周期与环境回收
 ├── mapper/         # MyBatis Mapper
+├── monitoring/     # 容器资源采集
 ├── service/        # 业务服务层
 └── util/           # 工具类
 ```
@@ -193,7 +201,7 @@ DEEPSEEK_MODEL=deepseek-flash
 
 `deepseek` 走 OpenAI 协议（`https://api.deepseek.com`），`deepseek-anthropic` 走 Anthropic 协议（`https://api.deepseek.com/anthropic`）。要改用后者，把 `deepseek-anthropic` 写进 `AI_PROVIDER_ORDER`。
 
-新增一个 OpenAI 或 Anthropic 兼容提供商：在 `application.yml` 的 `ai.providers` 下加一项，写上 `protocol`、`base-url`、`api-key`、`model`，再把这个名字放进 `AI_PROVIDER_ORDER`。每个提供商还可以设 `timeout`（秒，默认 60）、`max-tokens`（默认 2000）、`temperature`（默认 0.3）和 `enabled`（默认 true）。
+新增一个 OpenAI 或 Anthropic 兼容提供商：在 `src/main/resources/application.yml` 的 `ai.providers` 下加一项，写上 `protocol`、`base-url`、`api-key`、`model`，再把这个名字放进 `AI_PROVIDER_ORDER`。每个提供商还可以设 `timeout`（秒，默认 60）、`max-tokens`（默认 2000）、`temperature`（默认 0.3）和 `enabled`（默认 true）。
 
 `thinking` 可选，取值 `disabled`、`enabled`，或不写（`unset`）。不写时请求里不带该字段，避免官方 OpenAI 拒绝未知参数。`disabled` 时 OpenAI / Anthropic 发送 `"thinking":{"type":"disabled"}`，Ollama 发送 `"think": false`。`enabled` 时前两者发送 `{"type":"enabled"}`；Anthropic 还要求 `budget_tokens` 小于 `max_tokens`，只在 max-tokens 大于 1024 时附带 `max(1024, maxTokens/2)`，否则不发送 thinking。Ollama 的 `enabled` 是 `"think": true`。`deepseek` 和 `deepseek-anthropic` 默认 `thinking: ${DEEPSEEK_THINKING:disabled}`，因为 `deepseek-flash` 会先推理，思考占满 max-tokens 时正文会是空的。空正文（OpenAI 的空白 `content`、Anthropic 只有 thinking 块、Ollama 空白 `content`）算调用失败，路由会试下一个提供商。
 
