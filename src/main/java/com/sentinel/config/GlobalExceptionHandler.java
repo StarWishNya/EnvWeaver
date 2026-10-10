@@ -147,10 +147,13 @@ public class GlobalExceptionHandler {
      * 处理业务异常。HTTP 状态按错误码映射：认证失败 401，权限不足 403，资源不存在 404，Docker 错误 503，其余 400。
      */
     @ExceptionHandler(BusinessException.class)
-    public ResponseEntity<ApiResponse<Void>> handleBusinessException(BusinessException ex) {
+    public ResponseEntity<ApiResponse<Object>> handleBusinessException(BusinessException ex) {
         log.warn("业务异常: code={}, message={}", ex.getCode(), ex.getMessage());
-        return ResponseEntity.status(resolveHttpStatus(ex.getCode()))
-                .body(ApiResponse.error(ex.getCode(), ex.getMessage()));
+        ApiResponse<Object> body = ApiResponse.error(ex.getCode(), ex.getMessage());
+        if (ex.getData() != null) {
+            body.setData(ex.getData());
+        }
+        return ResponseEntity.status(resolveHttpStatus(ex.getCode())).body(body);
     }
 
     static HttpStatus resolveHttpStatus(Integer code) {

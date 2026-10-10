@@ -266,7 +266,7 @@ BASE_URL=http://localhost:8080 bash scripts/ai-smoke-test.sh
 
 创建任务后，应用自动为它准备测试环境：
 
-1. 按 `dependencies` 启动容器。内置 `mysql`、`redis`、`postgres`、`mongodb`、`rabbitmq`、`nginx`，可在 `sentinel.provisioning.dependencies` 中覆盖或新增。主机端口从 `sentinel.provisioning.port-range`（默认 30000-39999）分配，结果在环境的 `portMappings` 中。
+1. 按 `dependencies` 启动容器。种类、版本和镜像在 `src/main/resources/catalog/middleware.yaml`，也可用 `template` 选择 `catalog/templates.yaml` 里的组合。`sentinel.provisioning.dependencies` 覆盖同名种类的默认版本，或新增目录里没有的种类。主机端口从 `sentinel.provisioning.port-range`（默认 30000-39999）分配，结果在环境的 `portMappings` 中。
 2. 容器端口可连接后，环境变为 `BUSY`，任务变为 `RUNNING`。依赖名未知或容器启动失败时，任务变为 `FAILED`，`errorMessage` 写明原因。
 3. 外部 CI 用 `PUT /api/tasks/{taskId}/status?status=SUCCESS|FAILED` 回报结果，或用 `DELETE` 取消。
 4. `SUCCESS` 和取消会立即释放环境。`FAILED` 会先自动请求 AI 诊断（此时容器日志还在），再把环境标为 `RETAINED`，保留 `sentinel.lifecycle.failed-retention`（默认 30 分钟）供排查。环境创建本身失败时，环境保持 `ERROR`，同样在保留期后回收。
@@ -275,6 +275,20 @@ BASE_URL=http://localhost:8080 bash scripts/ai-smoke-test.sh
 `sentinel.lifecycle.auto-provision` 和 `auto-diagnose` 可分别关闭自动供给和失败自动诊断。测试 profile 中两者都关闭。
 
 `READY`、`BUSY`、`RETAINED` 的环境每 `sentinel.monitoring.resource-usage.interval`（默认 30 秒）通过 `docker stats` 采集一次，各容器汇总后写入 `resourceUsage`。环境变为 `IDLE` 后清空。设置 `sentinel.monitoring.resource-usage.enabled=false` 可关闭采集。
+
+## 中间件目录与环境模板
+
+运维维护的目录是 `src/main/resources/catalog/middleware.yaml`（`schemaVersion: 1` 加 `revision`）。每种中间件有 `defaultVersion` 和 `versions`。每个版本要有 `version`、`image`、`containerPort`，还可以写 `aliases`、`env`、`readiness`（目前只支持 `tcp`，可选 `startupGraceSeconds`）和 `resources`（`memoryMb`、`cpu`，只作提示，不改变容器限额）。
+
+启动时加载。缺镜像或端口、版本或别名重复、默认版本不在 `versions` 里、模板依赖无法解析，应用都起不来。
+
+记号 `mysql` 用默认版本，`mysql:8` 走别名，`mysql:5.7` 用该版本。未知种类或版本返回 HTTP 400（业务码 5004），`message` 和 `data.candidates` 列出可选项。`GET /api/catalog/middleware` 与 `GET /api/catalog/templates` 需要登录，任何角色都可以读。目录接口不返回环境变量。
+
+`sentinel.provisioning.dependencies.<kind>` 覆盖该种类的**默认版本**（不写版本，或写的就是默认版本 / 它的别名）。显式的非默认版本仍用目录里的镜像和端口。目录中没有的种类可以在这里新增，但必须同时给出 `image` 和 `port`。
+
+新增一种中间件：在 `kinds` 下加一块，写好默认版本和至少一个版本，重启。要让创建任务时能勾选组合，再在 `src/main/resources/catalog/templates.yaml` 加一项，字段是 `name`、`displayName`（中文）、`description`、`dependencies`。同一种类在一条模板里只能出现一次，依赖必须能在中间件目录里解析。
+
+创建任务可以只传 `template`（例如 `data-stack`）。`dependencies` 为空时用模板依赖；两者都传时按种类合并，显式依赖覆盖模板里的同一种类。未知模板同样是 HTTP 400，`data.candidates` 是模板名。
 
 ## 配置说明
 

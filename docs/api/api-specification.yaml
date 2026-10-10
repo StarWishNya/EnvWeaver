@@ -66,6 +66,8 @@ tags:
     description: 用户登录、登出与当前用户
   - name: Task
     description: 任务的创建、查询、取消与状态更新
+  - name: Catalog
+    description: 中间件目录与环境模板。任何已登录角色都可以读。
   - name: Environment
     description: 环境查询与释放
   - name: Metrics
@@ -374,6 +376,15 @@ components:
           example:
             - mysql:8.0
             - redis:7.0
+        template:
+          type: string
+          maxLength: 64
+          description: |
+            可选环境模板名，取值见 GET /api/catalog/templates。
+            dependencies 不传或为空时使用模板依赖。
+            两者都传时按种类合并，同一种类以 dependencies 为准。
+            未知模板返回 HTTP 400，data.candidates 为可选模板名。
+          example: data-stack
         priority:
           type: integer
           minimum: 1
@@ -757,7 +768,108 @@ components:
           format: date-time
           nullable: true
 
+    MiddlewareCatalogResponse:
+      type: object
+      properties:
+        revision:
+          type: string
+        kinds:
+          type: array
+          items:
+            $ref: '#/components/schemas/MiddlewareKind'
+    MiddlewareKind:
+      type: object
+      properties:
+        kind:
+          type: string
+        defaultVersion:
+          type: string
+        versions:
+          type: array
+          items:
+            $ref: '#/components/schemas/MiddlewareVersion'
+    MiddlewareVersion:
+      type: object
+      properties:
+        version:
+          type: string
+        aliases:
+          type: array
+          items:
+            type: string
+        image:
+          type: string
+        containerPort:
+          type: integer
+    TemplateCatalogResponse:
+      type: object
+      properties:
+        revision:
+          type: string
+        templates:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvironmentTemplate'
+    EnvironmentTemplate:
+      type: object
+      properties:
+        name:
+          type: string
+        displayName:
+          type: string
+        description:
+          type: string
+        dependencies:
+          type: array
+          items:
+            type: string
+
 paths:
+  /api/catalog/middleware:
+    get:
+      tags: [Catalog]
+      summary: 中间件目录
+      description: |
+        返回种类、版本、别名、默认版本、镜像和容器端口。不含环境变量。
+        任何已登录角色都可以访问。未登录返回 HTTP 401。
+      operationId: getMiddlewareCatalog
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/MiddlewareCatalogResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/catalog/templates:
+    get:
+      tags: [Catalog]
+      summary: 环境模板
+      description: |
+        返回命名模板及其依赖记号。任何已登录角色都可以访问。未登录返回 HTTP 401。
+      operationId: getTemplateCatalog
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/TemplateCatalogResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
   /api/auth/login:
     post:
       tags: [Auth]

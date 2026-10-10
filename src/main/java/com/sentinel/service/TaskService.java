@@ -14,6 +14,9 @@ import com.sentinel.enums.ErrorCode;
 import com.sentinel.event.TaskCreatedEvent;
 import com.sentinel.event.TaskStatusChangedEvent;
 import com.sentinel.mapper.TaskMapper;
+import com.sentinel.service.provision.DependencyCatalog;
+import com.sentinel.service.provision.TemplateCatalog;
+import com.sentinel.service.provision.TemplateExpander;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
@@ -56,14 +59,20 @@ public class TaskService {
     private final TaskMapper taskMapper;
     private final DockerService dockerService;
     private final ApplicationEventPublisher eventPublisher;
+    private final TemplateCatalog templateCatalog;
+    private final DependencyCatalog dependencyCatalog;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public TaskService(TaskMapper taskMapper,
                        DockerService dockerService,
-                       ApplicationEventPublisher eventPublisher) {
+                       ApplicationEventPublisher eventPublisher,
+                       TemplateCatalog templateCatalog,
+                       DependencyCatalog dependencyCatalog) {
         this.taskMapper = taskMapper;
         this.dockerService = dockerService;
         this.eventPublisher = eventPublisher;
+        this.templateCatalog = templateCatalog;
+        this.dependencyCatalog = dependencyCatalog;
     }
 
     /**
@@ -92,11 +101,14 @@ public class TaskService {
      */
     @Transactional
     public Task createTask(CreateTaskRequest request) {
+        List<String> dependencies = TemplateExpander.expand(
+                templateCatalog, request.getTemplate(), request.getDependencies());
+        dependencyCatalog.resolveTokens(dependencies);
         Task task = new Task();
         task.setTaskCode(request.getTaskCode());
         task.setServiceId(request.getServiceId());
         task.setTestType(request.getTestType());
-        task.setDependencies(normalizeDependencies(request.getDependencies()));
+        task.setDependencies(normalizeDependencies(dependencies));
         task.setStatus("PENDING");
         task.setPriority(request.getPriority() == null ? DEFAULT_PRIORITY : request.getPriority());
 

@@ -1,0 +1,22 @@
+schemaVersion: 1
+revision: "2026-10-10.1"
+templates:
+  - name: web-stack
+    displayName: Web 技术栈
+    description: MySQL 8.0、Redis 7 与 Nginx，适合带缓存的 Web 服务。
+    dependencies:
+      - mysql:8.0
+      - redis:7
+      - nginx
+  - name: data-stack
+    displayName: 数据技术栈
+    description: PostgreSQL 16 与 Redis 7，适合数据服务。
+    dependencies:
+      - postgres:16
+      - redis:7
+  - name: mq-stack
+    displayName: 消息技术栈
+    description: Kafka 3.7（KRaft 单节点）与 MySQL 8.0。
+    dependencies:
+      - kafka:3.7
+      - mysql:8.0

@@ -338,12 +338,13 @@ class DockerEnvironmentProvisionerTest {
     @DisplayName("未知依赖在创建环境之前失败")
     void unknownDependencyDoesNotCreateEnvironment() {
         BusinessException failure = catchThrowableOfType(
-                () -> provisioner.provision(task(1L, "[\"kafka\"]")), BusinessException.class);
+                () -> provisioner.provision(task(1L, "[\"oracle\"]")), BusinessException.class);
 
         assertThat(failure).isNotNull();
         assertThat(failure).isNotInstanceOf(ProvisioningFailedException.class);
         assertThat(failure.getCode()).isEqualTo(ErrorCode.VALIDATION_ERROR.getCode());
-        assertThat(failure.getMessage()).isEqualTo("未知依赖: kafka");
+        assertThat(failure.getMessage()).isEqualTo(
+                "未知依赖: oracle，可选种类: mysql, redis, postgres, mongodb, nginx, kafka");
         verify(environmentMapper, never()).insert(any(Environment.class));
         verifyNoInteractions(portAllocator);
         verifyNoInteractions(containerLauncher);

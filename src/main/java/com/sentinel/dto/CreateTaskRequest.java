@@ -45,6 +45,12 @@ public class CreateTaskRequest {
     private List<String> dependencies;
 
     /**
+     * 环境模板名。dependencies 为空时使用模板依赖；两者都有时按种类合并，显式依赖优先。
+     */
+    @Size(max = 64, message = "模板名长度不能超过64")
+    private String template;
+
+    /**
      * 优先级 1-10。不传时按 5 处理。
      */
     @Min(value = 1, message = "优先级必须在1到10之间")
