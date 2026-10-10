@@ -117,6 +117,9 @@ logging:
 # 任务生命周期（开发环境）
 # ============================================================================
 sentinel:
+  security:
+    # 开发环境只告警，不因种子口令拒绝启动
+    credential-check: "warn"
   lifecycle:
     auto-provision: true
     auto-diagnose: true

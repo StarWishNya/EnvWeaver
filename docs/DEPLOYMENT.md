@@ -121,8 +121,11 @@ REDIS_HOST=your-redis-host
 REDIS_PORT=6379
 REDIS_PASSWORD=your-redis-password
 
-# JWT 配置
+# JWT 配置。用 openssl rand -base64 48 生成，不要抄 .env.example 里的 change_me 示例
 JWT_SECRET=your-very-long-and-secure-secret-key-at-least-256-bits
+
+# 至少 12 位。启动时写入 admin 的 BCrypt；生产 profile 会拒绝 admin123 等默认口令
+SENTINEL_ADMIN_PASSWORD=replace-with-at-least-12-random-chars
 
 # AI 配置
 AI_PROVIDER=openai
@@ -363,7 +366,7 @@ java -Xms512m -Xmx2g \
 
 ## 安全建议
 
-1. **修改默认密码**: 生产环境必须修改所有默认密码
+1. **修改默认密码**: 生产环境必须修改所有默认密码。`prod` 的 `sentinel.security.credential-check=fail` 会在 `JWT_SECRET` 仍是示例值，或启用用户仍使用 `admin123` / `user123` / `admin` / `password` / `123456` 时拒绝启动。设置 `SENTINEL_ADMIN_PASSWORD`（至少 12 位）可在启动时重置 `admin`
 2. **使用 HTTPS**: 配置 SSL/TLS 证书
 3. **限制访问**: 使用防火墙限制端口访问
 4. **定期更新**: 及时更新依赖和镜像版本

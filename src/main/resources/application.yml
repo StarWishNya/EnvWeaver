@@ -199,6 +199,13 @@ logging:
 # 任务生命周期
 # ============================================================================
 sentinel:
+  security:
+    # fail 拒绝启动，warn 每个问题一条 WARN，off 不检查。
+    # prod=fail，dev 与默认=warn，test=off。可用 --sentinel.security.credential-check= 覆盖。
+    credential-check: "warn"
+    # 非空时启动把 admin 密码设为该值的 BCrypt；没有 admin 则创建，角色 ADMIN。
+    # 环境变量名是 SENTINEL_ADMIN_PASSWORD。长度至少 12，否则拒绝启动。
+    admin-password: "${SENTINEL_ADMIN_PASSWORD:}"
   lifecycle:
     # 创建任务后自动供给环境
     auto-provision: true

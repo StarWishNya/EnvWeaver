@@ -113,6 +113,10 @@ logging:
 # 回收与补扫间隔拉长，且首次执行同样延后，上下文启动时不会立刻跑定时任务。
 # ============================================================================
 sentinel:
+  security:
+    # 测试默认关闭。单个测试可设置 sentinel.security.credential-check 打开。
+    # off 必须加引号，YAML 1.1 会把不加引号的 off 解析成布尔 false。
+    credential-check: "off"
   lifecycle:
     auto-provision: false
     auto-diagnose: false

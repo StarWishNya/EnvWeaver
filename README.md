@@ -29,7 +29,7 @@
 cp .env.example .env
 ```
 
-编辑 `.env` 文件。`JWT_SECRET` 为必填（至少 32 个字符），主配置不再提供默认值。Docker Compose 不会给 MySQL 或 Redis 填默认密码：`.env` 里必须有非空的 `MYSQL_ROOT_PASSWORD`、`MYSQL_PASSWORD`、`REDIS_PASSWORD`，否则容器拒绝启动。复制后把示例里的 `change_me_*` 都换成随机值：
+编辑 `.env` 文件。`JWT_SECRET` 为必填（至少 32 个字符），主配置不再提供默认值。`.env.example` 里的 `JWT_SECRET` 带 `change_me`，启动检查会拒绝它，必须换成随机值（`openssl rand -base64 48`）。Docker Compose 不会给 MySQL 或 Redis 填默认密码：`.env` 里必须有非空的 `MYSQL_ROOT_PASSWORD`、`MYSQL_PASSWORD`、`REDIS_PASSWORD`，否则容器拒绝启动。复制后把示例里的 `change_me_*` 都换成随机值：
 
 ```bash
 # Compose：MySQL / Redis / Ollama 只绑定 127.0.0.1。下面三项必填，没有默认密码
@@ -41,8 +41,12 @@ REDIS_PASSWORD=your_redis_password
 DB_USERNAME=root
 DB_PASSWORD=your_mysql_root_password
 
-# JWT 密钥（至少 32 个字符，必填）
-JWT_SECRET=your-super-secret-jwt-key-change-in-production
+# JWT 密钥（至少 32 个字符，必填）。不要保留 change_me 示例。
+# openssl rand -base64 48
+JWT_SECRET=change_me_replace_this_jwt_secret_min_32_characters
+
+# 可选。非空时启动会把 admin 密码改成这个值（至少 12 个字符）。不要用示例。
+# SENTINEL_ADMIN_PASSWORD=change_me_admin_min_12
 
 # AI 服务配置（可选）。DeepSeek 优先、本地 Ollama 兜底：
 AI_PROVIDER_ORDER=deepseek,ollama
@@ -87,7 +91,7 @@ mvn clean package
 
 ### 4. 运行应用
 
-应用启动必须提供 `JWT_SECRET`（至少 32 个字符）。主配置不再内置默认密钥，可通过环境变量提供，或使用已被 `.gitignore` 忽略的 `.env` 文件（`cp .env.example .env` 后设置 `JWT_SECRET`；`src/main/resources/application.yml` 会导入 `optional:file:.env[.properties]`）。
+应用启动必须提供 `JWT_SECRET`（至少 32 个字符，至少 8 个不同字符，且不能是示例或占位符）。主配置不再内置默认密钥，可通过环境变量提供，或使用已被 `.gitignore` 忽略的 `.env` 文件（`cp .env.example .env` 后设置 `JWT_SECRET`；`src/main/resources/application.yml` 会导入 `optional:file:.env[.properties]`）。生产环境还要换掉种子口令，见 [首次登录与生产检查清单](#首次登录与生产检查清单)。
 
 ```bash
 # 开发环境（默认）
@@ -100,7 +104,8 @@ mvn spring-boot:run -Dspring-boot.run.profiles=test
 java -jar target/sentinel-1.0.0-SNAPSHOT.jar --spring.profiles.active=prod
 
 # 使用环境变量覆盖配置
-export JWT_SECRET=your-production-secret
+export JWT_SECRET="$(openssl rand -base64 48)"
+export SENTINEL_ADMIN_PASSWORD="$(openssl rand -base64 18)"
 export DB_PASSWORD=your-db-password
 java -jar target/sentinel-1.0.0-SNAPSHOT.jar --spring.profiles.active=prod
 ```
@@ -120,11 +125,43 @@ docker-compose down -v
 
 ### 访问应用
 
-- Web 界面: http://localhost:8080/ （用 `admin` / `admin123` 登录，可管理任务、查看环境与日志、请求 AI 诊断、看监控）
+- Web 界面: http://localhost:8080/ （开发环境在改口令前可用种子账号 `admin` / `admin123` 登录，可管理任务、查看环境与日志、请求 AI 诊断、看监控。这是公开默认口令，启动时会告警；生产环境会拒绝启动）
 - 应用地址: http://localhost:8080
 - Swagger UI: http://localhost:8080/swagger-ui.html
 - Actuator: http://localhost:8080/actuator
 - Prometheus Metrics: http://localhost:8080/actuator/prometheus（需要管理员 Bearer Token）
+
+## 首次登录与生产检查清单
+
+`schema.sql` 会插入管理员 `admin`，口令是公开的 `admin123`。`data.sql` 还会插入普通用户 `user` / `user123`。这两条口令只适合本机第一次打开界面，不能留在生产库里。
+
+启动类 `CredentialStartupGuard` 读取 `sentinel.security.credential-check`：
+
+| Profile | 值 | 行为 |
+| --- | --- | --- |
+| 默认（`application.yml`）和 `dev` | `warn` | 每个问题打一条 WARN，启动继续 |
+| `prod` | `fail` | 拒绝启动，日志写明是哪一项、怎么改 |
+| `test` | `off` | 不检查，除非测试自己把该属性改成 `warn` 或 `fail` |
+
+YAML 里 `off` 必须写成 `"off"`。不加引号时 YAML 1.1 会把它读成布尔值 `false`，启动会认为配置无效。
+
+命令行 `--sentinel.security.credential-check=fail` 可以覆盖配置文件。检查两类问题，日志里不会出现密钥、新口令或 BCrypt 哈希：
+
+1. `JWT_SECRET` 命中 `.env.example` 的示例值，或包含 `change-in-production`、`your-super-secret`、`changeme`、`change_me`（忽略大小写），或不同字符少于 8 个。换成 `openssl rand -base64 48` 的结果。
+2. 任一启用用户的密码哈希能对上 `admin123`、`user123`、`admin`、`password`、`123456`。
+
+管理员口令用环境变量 `SENTINEL_ADMIN_PASSWORD`（配置项 `sentinel.security.admin-password`）处理：值非空时，启动把用户 `admin` 的密码写成该值的 BCrypt；库里没有 `admin` 就创建，角色 `ADMIN`。长度必须不少于 12，更短则直接拒绝启动。不要把真实口令写进日志或仓库。
+
+生产上线前核对：
+
+- [ ] `SPRING_PROFILES_ACTIVE=prod`（`credential-check` 为 `fail`）
+- [ ] `JWT_SECRET` 已换成随机值，不是 `.env.example` 里的 `change_me` 示例
+- [ ] 已设置至少 12 位的 `SENTINEL_ADMIN_PASSWORD`，或确认 `admin` 已不再使用 `admin123`
+- [ ] `user` / `user123` 已改掉或该用户已禁用
+- [ ] MySQL、Redis 密码已换成随机值，不使用示例里的 `change_me_*`
+- [ ] 启动日志里没有 `【凭据安全检查】`
+
+开发环境不设置 `SENTINEL_ADMIN_PASSWORD` 时，仍可用 `admin` / `admin123` 登录，同时会看到一条警告。冒烟脚本 `scripts/smoke-test.sh` 和 `scripts/ai-smoke-test.sh` 默认也用这组口令；重置之后要改脚本或自行登录。
 
 ## 运行测试
 
@@ -141,7 +178,7 @@ mvn -B -o clean test
 
 日志文件：`target/logs/sentinel-test.log`。
 
-可用环境变量覆盖：`DB_HOST`、`DB_PORT`、`DB_NAME`、`DB_USERNAME`、`DB_PASSWORD`、`REDIS_HOST`、`REDIS_PORT`、`REDIS_PASSWORD`、`JWT_SECRET`。未设置 `JWT_SECRET` 时，测试使用配置中内置的、长度不少于 32 的测试密钥。
+可用环境变量覆盖：`DB_HOST`、`DB_PORT`、`DB_NAME`、`DB_USERNAME`、`DB_PASSWORD`、`REDIS_HOST`、`REDIS_PORT`、`REDIS_PASSWORD`、`JWT_SECRET`。未设置 `JWT_SECRET` 时，测试使用配置中内置的、长度不少于 32 的测试密钥。测试 profile 的 `sentinel.security.credential-check` 为 `off`，种子口令不会让测试上下文启动失败；单个测试可以把该属性设为 `warn` 或 `fail`。
 
 数据库集成测试在事务结束后回滚，重复运行不会在 `t_task` 留下新行。
 
@@ -242,7 +279,7 @@ curl -X POST "$BASE/api/diagnosis/$TASK_ID" \
 BASE_URL=http://localhost:8080 bash scripts/ai-smoke-test.sh
 ```
 
-脚本用 `admin` / `admin123` 登录，创建唯一任务，提交一段 MySQL `3306` 连接被拒绝、随后 `ApplicationContext` 启动失败的 Spring 日志，并在 90 秒内轮询到 `COMPLETED`。
+脚本用 `admin` / `admin123` 登录，创建唯一任务，提交一段 MySQL `3306` 连接被拒绝、随后 `ApplicationContext` 启动失败的 Spring 日志，并在 90 秒内轮询到 `COMPLETED`。若已经用 `SENTINEL_ADMIN_PASSWORD` 重置过 admin，需要改脚本里的口令，否则登录失败。
 
 ## 任务、环境与监控接口
 

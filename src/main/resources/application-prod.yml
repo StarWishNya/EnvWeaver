@@ -149,6 +149,9 @@ management:
 # 任务生命周期（生产环境）
 # ============================================================================
 sentinel:
+  security:
+    # 生产环境发现示例密钥或默认口令时拒绝启动
+    credential-check: "fail"
   lifecycle:
     auto-provision: true
     auto-diagnose: true

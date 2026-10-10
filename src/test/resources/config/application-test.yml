@@ -26,3 +26,9 @@ jwt:
 logging:
   file:
     name: target/logs/sentinel-test.log
+
+# 测试 profile 关闭启动凭据检查，避免种子口令让 Spring 上下文起不来。
+# 优先级高于主配置里的 application-test.yml。
+sentinel:
+  security:
+    credential-check: "off"
