@@ -31,8 +31,8 @@
         <testcontainers.version>1.19.3</testcontainers.version>
         <embedded-redis.version>0.7.3</embedded-redis.version>
         <wiremock.version>3.3.1</wiremock.version>
-        <!-- 默认排除 @Tag("live")。在线测试：mvn -B -o test -Dgroups=live -Dsurefire.excludedGroups= -->
-        <surefire.excludedGroups>live</surefire.excludedGroups>
+        <!-- 默认排除 @Tag("live") 与 @Tag("ai-eval")。在线诊断评估：mvn -B -o -Pai-eval test -->
+        <surefire.excludedGroups>live,ai-eval</surefire.excludedGroups>
     </properties>
 
     <dependencies>
@@ -311,4 +311,32 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <profile>
+            <id>ai-eval</id>
+            <properties>
+                <surefire.excludedGroups>live</surefire.excludedGroups>
+                <ai.eval.label>tuned</ai.eval.label>
+                <ai.eval.runs>2</ai.eval.runs>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <groups>ai-eval</groups>
+                            <excludedGroups>${surefire.excludedGroups}</excludedGroups>
+                            <useFile>false</useFile>
+                            <systemPropertyVariables>
+                                <ai.eval.label>${ai.eval.label}</ai.eval.label>
+                                <ai.eval.runs>${ai.eval.runs}</ai.eval.runs>
+                            </systemPropertyVariables>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

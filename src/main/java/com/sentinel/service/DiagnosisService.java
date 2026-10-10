@@ -68,16 +68,33 @@ public class DiagnosisService {
             "\\s*\"(-?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+-]?\\d+)?)\"");
     private static final Pattern BARE_NUMBER = Pattern.compile(
             "\\s*(-?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+-]?\\d+)?)");
+    private static final Pattern EXCEPTION_HEADER = Pattern.compile(
+            "^(?:[\\w$]+\\.)*[\\w$]*(?:Exception|Error)(?::.*)?$");
+    private static final Pattern THINKING_BLOCK = Pattern.compile("(?s)<think>.*?</think>");
+    private static final String PROMPT_OMISSION = "...[中间日志已省略]";
+    private static final int PROMPT_FRAME_BUDGET = 6;
+    private static final int PROMPT_PREAMBLE_LINES = 20;
+    private static final int PROMPT_TAIL_LINES = 24;
     private static final String SYSTEM_PROMPT = """
             你是容器与 Spring 应用故障诊断专家。
-            只输出一个 JSON 对象，不要使用 Markdown，不要输出解释。
-            文本字段使用中文。字段必须是：
-            errorType（RESOURCE_EXHAUSTED、NETWORK_ERROR、DEPENDENCY_FAILURE、TIMEOUT、CONFIG_ERROR、UNKNOWN 之一），
-            severity（LOW、MEDIUM、HIGH、CRITICAL 之一），
-            summary（问题摘要），
-            rootCause（根因），
-            suggestions（修复建议字符串数组），
-            confidence（0 到 1 的小数）。
+            只输出一个 JSON 对象，不要使用 Markdown，不要代码围栏，不要输出解释或思考过程。
+            文本字段使用中文。rootCause 用一两句说明最底层原因，并引用日志里的异常类名或关键错误短语。
+            suggestions 是 1 到 4 条中文修复建议。confidence 是 0 到 1 的小数。
+            字段必须且只能是 errorType、severity、summary、rootCause、suggestions、confidence。
+
+            errorType 必须是下列英文大写之一。先看最底层的 Caused by，再按顺序归类，命中即停止：
+            1. TIMEOUT：失败的直接原因是超过时限。例：TimeoutException、timed out。连接被拒绝不要归入此类。
+            2. RESOURCE_EXHAUSTED：进程或机器耗尽内存、磁盘、文件句柄或线程。例：OutOfMemoryError、Java heap space、No space left on device。
+            3. CONFIG_ERROR：只有配置缺失、占位符未解析，或用户名口令被拒绝。例：Could not resolve placeholder、Access denied for user。端口占用、空指针、断言失败、并发修改都不是 CONFIG_ERROR。
+            4. NETWORK_ERROR：名字解析失败、连接被拒绝，或端口绑定失败。例：UnknownHostException、Connection refused、Address already in use。
+            5. DEPENDENCY_FAILURE：依赖的类或库不在 classpath，或下游已经连通但返回失败。例：ClassNotFoundException、NoClassDefFoundError、HTTP 500/502/503。
+            6. UNKNOWN：业务代码缺陷、测试断言或竞态，且不符合以上类别。例：NullPointerException、AssertionFailedError、ConcurrentModificationException。
+
+            severity 必须是 LOW、MEDIUM、HIGH、CRITICAL 之一：
+            - CRITICAL：只有内存或磁盘耗尽。应用启动失败本身不是 CRITICAL。
+            - HIGH：服务无法完成启动，或一次线上请求失败，例如连不上、认证失败、端口被占用、缺配置、缺类、下游 5xx、请求线程里的空指针。
+            - MEDIUM：自动化测试里的断言失败、测试超时，或测试中的偶发竞态。
+            - LOW：已经自动恢复，或只是不影响本次结果的告警。
             """;
 
     private final AIRouter aiRouter;
@@ -514,11 +531,305 @@ public class DiagnosisService {
         return new DiagnosisSubmission(response, fromCache);
     }
 
+    /**
+     * 与线上诊断发给模型的系统提示词相同。评估器只能从这里取，不能另写一份。
+     */
+    public static String diagnosisSystemPrompt() {
+        return SYSTEM_PROMPT;
+    }
+
+    /**
+     * 与线上诊断发给模型的用户提示词相同，日志裁剪规则也相同。
+     */
+    public static String diagnosisUserPrompt(String input) {
+        return buildUserPrompt(input == null ? "" : input);
+    }
+
+    /**
+     * 诊断 errorType 枚举。非法值解析为 UNKNOWN。
+     */
+    public static Set<String> diagnosisErrorTypes() {
+        return ERROR_TYPES;
+    }
+
+    /**
+     * 诊断 severity 枚举。非法值解析为 MEDIUM。
+     */
+    public static Set<String> diagnosisSeverities() {
+        return SEVERITIES;
+    }
+
     private static String buildUserPrompt(String input) {
-        String body = input.length() > PROMPT_LOG_MAX
-                ? input.substring(0, PROMPT_LOG_MAX) + "\n...[日志已截断]"
-                : input;
-        return "请诊断下面的日志，只返回一个 JSON 对象。\n\n" + body;
+        String body = trimLogForPrompt(input, PROMPT_LOG_MAX);
+        return """
+                请根据系统提示中的分类标准诊断下面的日志。
+                只输出一个 JSON 对象，不要 Markdown，不要代码围栏，不要额外解释。
+
+                """ + body;
+    }
+
+    /**
+     * 超长日志保留异常出现前的一小段、第一条异常（含每段有限栈帧和全部 Caused by）以及日志尾部。
+     * 未超过 max 时原样返回。
+     */
+    static String trimLogForPrompt(String input, int max) {
+        if (input == null || input.isEmpty() || max <= 0) {
+            return "";
+        }
+        if (input.length() <= max) {
+            return input;
+        }
+        String normalized = input.replace("\r\n", "\n").replace('\r', '\n');
+        if (normalized.length() <= max) {
+            return normalized;
+        }
+        String[] lines = normalized.split("\n", -1);
+        boolean[] keep = new boolean[lines.length];
+        int first = indexOfFirstException(lines);
+        if (first < 0) {
+            markHeadChars(lines, keep, Math.max(1, max * 2 / 5));
+            markTailChars(lines, keep, Math.max(1, max * 2 / 5));
+        } else {
+            int preambleFrom = Math.max(0, first - PROMPT_PREAMBLE_LINES);
+            for (int i = preambleFrom; i < first; i++) {
+                keep[i] = true;
+            }
+            markExceptionChain(lines, keep, first);
+            int tailFrom = Math.max(0, lines.length - PROMPT_TAIL_LINES);
+            for (int i = tailFrom; i < lines.length; i++) {
+                keep[i] = true;
+            }
+        }
+        return fitPrompt(lines, keep, first, max);
+    }
+
+    private static int indexOfFirstException(String[] lines) {
+        for (int i = 0; i < lines.length; i++) {
+            if (isExceptionHeader(lines[i])) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static boolean isExceptionHeader(String line) {
+        String trimmed = line == null ? "" : line.trim();
+        if (trimmed.startsWith("Caused by:")) {
+            return true;
+        }
+        return EXCEPTION_HEADER.matcher(trimmed).matches();
+    }
+
+    private static boolean isStackFrame(String line) {
+        String trimmed = line == null ? "" : line.trim();
+        return trimmed.startsWith("at ");
+    }
+
+    private static boolean isChainLine(String line) {
+        String trimmed = line == null ? "" : line.trim();
+        return trimmed.isEmpty()
+                || isStackFrame(trimmed)
+                || trimmed.startsWith("Caused by:")
+                || trimmed.startsWith("Suppressed:")
+                || trimmed.startsWith("...")
+                || isExceptionHeader(trimmed);
+    }
+
+    private static void markExceptionChain(String[] lines, boolean[] keep, int first) {
+        int frames = 0;
+        for (int i = first; i < lines.length; i++) {
+            String trimmed = lines[i].trim();
+            if (trimmed.isEmpty()) {
+                int next = i + 1;
+                while (next < lines.length && lines[next].trim().isEmpty()) {
+                    next++;
+                }
+                if (next >= lines.length || !isChainLine(lines[next])) {
+                    break;
+                }
+                continue;
+            }
+            if (isStackFrame(trimmed)) {
+                if (frames < PROMPT_FRAME_BUDGET) {
+                    keep[i] = true;
+                    frames++;
+                }
+                continue;
+            }
+            if (trimmed.startsWith("Caused by:") || trimmed.startsWith("Suppressed:")
+                    || trimmed.startsWith("...") || isExceptionHeader(trimmed)) {
+                keep[i] = true;
+                frames = 0;
+                continue;
+            }
+            if (i == first) {
+                keep[i] = true;
+                continue;
+            }
+            break;
+        }
+    }
+
+    private static void markHeadChars(String[] lines, boolean[] keep, int budget) {
+        int used = 0;
+        for (int i = 0; i < lines.length; i++) {
+            int cost = lines[i].length() + 1;
+            if (used > 0 && used + cost > budget) {
+                break;
+            }
+            keep[i] = true;
+            used += cost;
+            if (used >= budget) {
+                break;
+            }
+        }
+    }
+
+    private static void markTailChars(String[] lines, boolean[] keep, int budget) {
+        int used = 0;
+        for (int i = lines.length - 1; i >= 0; i--) {
+            int cost = lines[i].length() + 1;
+            if (used > 0 && used + cost > budget) {
+                break;
+            }
+            keep[i] = true;
+            used += cost;
+            if (used >= budget) {
+                break;
+            }
+        }
+    }
+
+    private static String fitPrompt(String[] lines, boolean[] keep, int first, int max) {
+        String assembled = assemblePrompt(lines, keep);
+        if (assembled.length() <= max) {
+            return assembled;
+        }
+        for (int i = 0; i < lines.length; i++) {
+            if (keep[i] && isStackFrame(lines[i])) {
+                keep[i] = false;
+            }
+        }
+        assembled = assemblePrompt(lines, keep);
+        boolean progress = true;
+        while (assembled.length() > max && progress) {
+            progress = dropPromptLine(lines, keep, first, true);
+            if (!progress) {
+                progress = dropPromptLine(lines, keep, first, false);
+            }
+            if (progress) {
+                assembled = assemblePrompt(lines, keep);
+            }
+        }
+        if (assembled.length() <= max) {
+            return assembled;
+        }
+        return hardCapPrompt(assembled, max);
+    }
+
+    private static boolean dropPromptLine(String[] lines, boolean[] keep, int first, boolean preamble) {
+        int tailStart = tailStart(keep, first);
+        if (preamble) {
+            int limit = first >= 0 ? first : tailStart;
+            for (int i = 0; i < limit; i++) {
+                if (keep[i] && !protectedPromptLine(lines[i], i, first)) {
+                    keep[i] = false;
+                    return true;
+                }
+            }
+            return false;
+        }
+        for (int i = tailStart; i < lines.length; i++) {
+            if (!keep[i] || protectedPromptLine(lines[i], i, first) || lastKept(keep, i)) {
+                continue;
+            }
+            keep[i] = false;
+            return true;
+        }
+        return false;
+    }
+
+    private static int tailStart(boolean[] keep, int first) {
+        if (first >= 0) {
+            int end = first;
+            for (int i = first; i < keep.length; i++) {
+                if (keep[i]) {
+                    end = i + 1;
+                } else if (end > first) {
+                    break;
+                }
+            }
+            return end;
+        }
+        boolean seenGap = false;
+        for (int i = 0; i < keep.length; i++) {
+            if (!keep[i]) {
+                seenGap = true;
+            } else if (seenGap) {
+                return i;
+            }
+        }
+        return keep.length;
+    }
+
+    private static boolean lastKept(boolean[] keep, int index) {
+        for (int i = index + 1; i < keep.length; i++) {
+            if (keep[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean protectedPromptLine(String line, int index, int first) {
+        if (first >= 0 && index == first) {
+            return true;
+        }
+        String trimmed = line == null ? "" : line.trim();
+        return trimmed.startsWith("Caused by:") || isExceptionHeader(line);
+    }
+
+    private static String assemblePrompt(String[] lines, boolean[] keep) {
+        StringBuilder builder = new StringBuilder();
+        boolean emitted = false;
+        boolean gap = false;
+        for (int i = 0; i < lines.length; i++) {
+            if (!keep[i]) {
+                if (emitted) {
+                    gap = true;
+                }
+                continue;
+            }
+            if (gap) {
+                if (!builder.isEmpty()) {
+                    builder.append('\n');
+                }
+                builder.append(PROMPT_OMISSION);
+                gap = false;
+            }
+            if (!builder.isEmpty()) {
+                builder.append('\n');
+            }
+            builder.append(lines[i]);
+            emitted = true;
+        }
+        return builder.toString();
+    }
+
+    private static String hardCapPrompt(String text, int max) {
+        String marker = "\n" + PROMPT_OMISSION + "\n";
+        if (text.length() <= max) {
+            return text;
+        }
+        if (max <= marker.length() + 2) {
+            return text.substring(0, Math.max(0, max));
+        }
+        int tail = Math.max(1, max / 3);
+        int head = max - marker.length() - tail;
+        if (head < 1) {
+            return text.substring(text.length() - max);
+        }
+        return text.substring(0, head) + marker + text.substring(text.length() - tail);
     }
 
     private static long newDiagnosisId() {
@@ -553,25 +864,31 @@ public class DiagnosisService {
      * 解析模型输出。非法枚举落到 UNKNOWN / MEDIUM。
      * 越界或非数字的 confidence 钳制到 [0,1]；字段缺失时为 null，不写成 0。
      * 对象被提前闭合时，从闭合后的原文补回缺失字段。
+     * 第一个花括号块不是 JSON 时，继续找后面能解析的对象。尾逗号会先去掉再解析。
      * 找不到 JSON 对象时 summary 取原文前 200 字，rootCause 取原文截断到 500 字，confidence 为 null。
      */
-    static ModelDiagnosis parseModelContent(String content, ObjectMapper objectMapper) {
+    public static ModelDiagnosis parseModelContent(String content, ObjectMapper objectMapper) {
         String raw = content == null ? "" : content;
-        String stripped = stripFence(raw.trim());
-        String json = extractJsonObject(stripped);
+        String stripped = stripFence(stripThinking(stripBom(raw).trim()));
+        String json = firstParsableObject(stripped, objectMapper);
         if (json == null) {
             return fallback(raw);
         }
         try {
-            JsonNode node = objectMapper.readTree(json);
+            JsonNode node = readDiagnosisObject(json, objectMapper);
             if (node == null || !node.isObject()) {
                 return fallback(raw);
             }
-            node = expandEarlyClose(stripped, node, objectMapper);
-            node = fillMissingFromSuffix(node, suffixAfter(stripped, json), objectMapper);
-            String rawSuffix = suffixAfter(raw, json);
-            if (!rawSuffix.equals(suffixAfter(stripped, json))) {
-                node = fillMissingFromSuffix(node, rawSuffix, objectMapper);
+            String first = extractJsonObject(stripped);
+            if (first != null && first.equals(json)) {
+                node = expandEarlyClose(stripped, node, objectMapper);
+                node = fillMissingFromSuffix(node, suffixAfter(stripped, json), objectMapper);
+                String rawSuffix = suffixAfter(raw, json);
+                if (!rawSuffix.equals(suffixAfter(stripped, json))) {
+                    node = fillMissingFromSuffix(node, rawSuffix, objectMapper);
+                }
+            } else {
+                node = fillMissingFromSuffix(node, suffixAfter(stripped, json), objectMapper);
             }
             String errorType = clampEnum(text(node, "errorType"), ERROR_TYPES, "UNKNOWN");
             String severity = clampEnum(text(node, "severity"), SEVERITIES, "MEDIUM");
@@ -911,6 +1228,109 @@ public class DiagnosisService {
         return new ModelDiagnosis("UNKNOWN", "MEDIUM", summary, root, List.of(), null, true);
     }
 
+    private static String stripBom(String value) {
+        if (value != null && !value.isEmpty() && value.charAt(0) == '\uFEFF') {
+            return value.substring(1);
+        }
+        return value == null ? "" : value;
+    }
+
+    private static String stripThinking(String value) {
+        if (value == null || value.isEmpty() || !value.contains("<think>")) {
+            return value == null ? "" : value;
+        }
+        return THINKING_BLOCK.matcher(value).replaceAll("").trim();
+    }
+
+    private static String firstParsableObject(String text, ObjectMapper mapper) {
+        if (text == null || text.isEmpty()) {
+            return null;
+        }
+        int search = 0;
+        while (search < text.length()) {
+            int start = text.indexOf('{', search);
+            if (start < 0) {
+                return null;
+            }
+            String extracted = extractJsonObject(text.substring(start));
+            if (extracted == null) {
+                return null;
+            }
+            if (readDiagnosisObject(extracted, mapper) != null) {
+                return extracted;
+            }
+            int next = start + extracted.length();
+            search = next > start ? next : start + 1;
+        }
+        return null;
+    }
+
+    private static JsonNode readDiagnosisObject(String json, ObjectMapper mapper) {
+        JsonNode node = tryReadObject(json, mapper);
+        if (node != null) {
+            return node;
+        }
+        String repaired = repairTrailingCommas(json);
+        if (!repaired.equals(json)) {
+            return tryReadObject(repaired, mapper);
+        }
+        return null;
+    }
+
+    private static JsonNode tryReadObject(String json, ObjectMapper mapper) {
+        try {
+            JsonNode node = mapper.readTree(json);
+            if (node == null || node.isNull()) {
+                return null;
+            }
+            if (node.isArray() && node.size() == 1 && node.get(0).isObject()) {
+                return node.get(0);
+            }
+            return node.isObject() ? node : null;
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    /**
+     * 去掉对象或数组结束前的尾逗号。字符串里的逗号保留。
+     */
+    static String repairTrailingCommas(String json) {
+        if (json == null || json.isEmpty()) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder(json.length());
+        boolean inString = false;
+        boolean escape = false;
+        for (int i = 0; i < json.length(); i++) {
+            char current = json.charAt(i);
+            if (inString) {
+                out.append(current);
+                if (escape) {
+                    escape = false;
+                } else if (current == '\\') {
+                    escape = true;
+                } else if (current == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (current == '"') {
+                inString = true;
+                out.append(current);
+                continue;
+            }
+            if (current == ',') {
+                int next = skipWs(json, i + 1);
+                if (next < json.length() && (json.charAt(next) == '}' || json.charAt(next) == ']')) {
+                    continue;
+                }
+            }
+            out.append(current);
+        }
+        return out.toString();
+    }
+
     private static String stripFence(String trimmed) {
         if (!trimmed.startsWith("```")) {
             return trimmed;
@@ -1039,7 +1459,7 @@ public class DiagnosisService {
      * 解析后的模型诊断。fallback 为 true 表示原文不是合法 JSON。
      * confidence 缺失时为 null。
      */
-    record ModelDiagnosis(String errorType, String severity, String summary, String rootCause,
-                          List<String> suggestions, Double confidence, boolean fallback) {
+    public record ModelDiagnosis(String errorType, String severity, String summary, String rootCause,
+                                 List<String> suggestions, Double confidence, boolean fallback) {
     }
 }
