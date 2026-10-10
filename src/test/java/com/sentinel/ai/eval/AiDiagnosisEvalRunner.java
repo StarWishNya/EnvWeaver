@@ -67,21 +67,42 @@ public final class AiDiagnosisEvalRunner {
     public static void main(String[] args) throws Exception {
         String label = System.getProperty("ai.eval.label", "tuned");
         int runs = Integer.parseInt(System.getProperty("ai.eval.runs", "2"));
+        String casesDir = System.getProperty("ai.eval.cases");
+        String runsDir = System.getProperty("ai.eval.runsDir");
+        boolean rewriteReport = rewriteReportEnabled();
         for (int i = 0; i < args.length; i++) {
             if ("--label".equals(args[i]) && i + 1 < args.length) {
                 label = args[++i];
             } else if ("--runs".equals(args[i]) && i + 1 < args.length) {
                 runs = Integer.parseInt(args[++i]);
+            } else if ("--cases".equals(args[i]) && i + 1 < args.length) {
+                casesDir = args[++i];
+            } else if ("--runs-dir".equals(args[i]) && i + 1 < args.length) {
+                runsDir = args[++i];
+            } else if ("--no-rewrite-report".equals(args[i])) {
+                rewriteReport = false;
             }
         }
-        run(label, runs);
+        run(label, runs, casesDir, runsDir, rewriteReport);
     }
 
     /**
      * 连续跑 {@code runs} 次，把每次结果写成 reports/ai-eval-runs，并重写总报告。
      * 一次调用都没有返回时抛出异常。解析失败仍记入报告。
+     * 样本目录取 {@code ai.eval.cases}，空白时仍是 classpath 上的 ai-eval/cases。
      */
     public static void run(String label, int runs) throws Exception {
+        run(label, runs, System.getProperty("ai.eval.cases"), System.getProperty("ai.eval.runsDir"),
+                rewriteReportEnabled());
+    }
+
+    /**
+     * @param casesDir 文件系统目录，或 classpath 目录（例如 {@code ai-eval/holdout}）。空白表示原来的 14 条样本。
+     * @param runsDir  结果 JSON 目录。空白表示 {@code reports/ai-eval-runs}。
+     * @param rewriteReport 为 false 时不改写 {@code reports/ai-diagnosis-eval.md}。
+     */
+    public static void run(String label, int runs, String casesDir, String runsDir, boolean rewriteReport)
+            throws Exception {
         if (label == null || !LABEL.matcher(label).matches()) {
             throw new IllegalArgumentException("label 只能包含字母、数字、下划线和连字符");
         }
@@ -91,43 +112,58 @@ public final class AiDiagnosisEvalRunner {
         Map<String, String> env = environment();
         List<String> secrets = secrets(env);
         AiDiagnosisEvalRunner runner = new AiDiagnosisEvalRunner(secrets);
-        List<EvalCase> cases = loadCases();
+        List<EvalCase> cases = loadCases(casesDir);
         AIProperties properties = propertiesFromEnv(env);
         AIRouter router = new AIRouter(properties, new AIProviderClientFactory(properties));
         runner.printProviders(router);
+        String shownCases = casesDir == null || casesDir.isBlank() ? "ai-eval/cases" : casesDir;
+        System.out.println("cases: " + shownCases + " (" + cases.size() + ")");
         if (router.status().stream().noneMatch(AIProviderStatus::available)) {
             throw new IllegalStateException("provider-order 里没有已配置的 AI 提供商");
         }
 
-        Path runsDir = Path.of("reports", "ai-eval-runs");
-        Files.createDirectories(runsDir);
+        Path runsPath = runsDir == null || runsDir.isBlank()
+                ? Path.of("reports", "ai-eval-runs")
+                : Path.of(runsDir);
+        Files.createDirectories(runsPath);
         String systemPrompt = DiagnosisService.diagnosisSystemPrompt();
         boolean anyResponse = false;
         for (int run = 1; run <= runs; run++) {
             RunResult result = runner.evaluateOnce(label, run, cases, router, properties, systemPrompt);
             anyResponse = anyResponse || result.anyResponse();
-            Path file = runsDir.resolve(label + "-" + run + ".json");
+            Path file = runsPath.resolve(label + "-" + run + ".json");
             String json = runner.redact(runner.mapper.writeValueAsString(result.toJson(runner.mapper)));
             Files.writeString(file, json + "\n", StandardCharsets.UTF_8);
             System.out.println();
             runner.printTable(result);
             System.out.println("wrote " + file);
         }
-        String markdown = runner.redact(renderReport(runsDir, runner.mapper));
-        Path report = Path.of("reports", "ai-diagnosis-eval.md");
-        Files.writeString(report, markdown, StandardCharsets.UTF_8);
-        System.out.println("wrote " + report);
+        if (rewriteReport) {
+            String markdown = runner.redact(withPreservedHoldout(renderReport(runsPath, runner.mapper)));
+            Path report = Path.of("reports", "ai-diagnosis-eval.md");
+            Files.writeString(report, markdown, StandardCharsets.UTF_8);
+            System.out.println("wrote " + report);
+        } else {
+            System.out.println("left reports/ai-diagnosis-eval.md unchanged");
+        }
         if (!anyResponse) {
             throw new IllegalStateException("全部样本都没有拿到模型响应");
         }
     }
 
+    /**
+     * classpath 上的 {@code ai-eval/cases}。{@code ai.eval.cases} 非空时改读该目录。
+     */
     public static List<EvalCase> loadCases() throws IOException, URISyntaxException {
-        var resource = AiDiagnosisEvalRunner.class.getResource("/ai-eval/cases");
-        if (resource == null) {
-            throw new IllegalStateException("classpath 上没有 ai-eval/cases");
-        }
-        Path dir = Path.of(resource.toURI());
+        return loadCases(System.getProperty("ai.eval.cases"));
+    }
+
+    /**
+     * @param directory 文件系统目录，或 classpath 目录。空白时与无参 {@link #loadCases()} 的默认目录相同，
+     *                  但不读取 {@code ai.eval.cases}。
+     */
+    public static List<EvalCase> loadCases(String directory) throws IOException, URISyntaxException {
+        Path dir = resolveCaseDir(directory);
         List<Path> files;
         try (Stream<Path> stream = Files.list(dir)) {
             files = stream.filter(path -> path.getFileName().toString().endsWith(".json"))
@@ -140,7 +176,7 @@ public final class AiDiagnosisEvalRunner {
             cases.add(parseCase(mapper.readTree(file.toFile()), file.getFileName().toString()));
         }
         if (cases.isEmpty()) {
-            throw new IllegalStateException("ai-eval/cases 下没有样本");
+            throw new IllegalStateException(dir + " 下没有样本");
         }
         List<String> ids = cases.stream().map(EvalCase::id).toList();
         if (ids.stream().distinct().count() != ids.size()) {
@@ -149,13 +185,47 @@ public final class AiDiagnosisEvalRunner {
         return List.copyOf(cases);
     }
 
+    private static Path resolveCaseDir(String directory) throws URISyntaxException {
+        if (directory == null || directory.isBlank()) {
+            return classpathDir("ai-eval/cases");
+        }
+        Path filesystem = Path.of(directory);
+        if (Files.isDirectory(filesystem)) {
+            return filesystem;
+        }
+        String resource = directory.startsWith("/") ? directory.substring(1) : directory;
+        while (resource.endsWith("/")) {
+            resource = resource.substring(0, resource.length() - 1);
+        }
+        return classpathDir(resource);
+    }
+
+    private static Path classpathDir(String resource) throws URISyntaxException {
+        var url = AiDiagnosisEvalRunner.class.getResource("/" + resource);
+        if (url == null) {
+            throw new IllegalStateException("找不到样本目录: " + resource);
+        }
+        return Path.of(url.toURI());
+    }
+
     /**
      * errorType、severity 与关键词命中互相独立。parseSuccess 为 false 时仍比较已解析出的枚举。
+     * 此重载只承认与 expectedType 完全相同的 errorType。
      */
     public static Score score(List<String> keywords, String expectedType, String expectedSeverity,
                               String actualType, String actualSeverity, String summary, String rootCause,
                               boolean parseSuccess) {
-        boolean typeMatch = expectedType != null && expectedType.equals(actualType);
+        return score(keywords, expectedType, List.of(), expectedSeverity, actualType, actualSeverity,
+                summary, rootCause, parseSuccess);
+    }
+
+    /**
+     * {@code acceptable} 里的枚举与 expectedType 一样算 errorType 命中。列表为空时与四枚举精确比较的重载相同。
+     */
+    public static Score score(List<String> keywords, String expectedType, List<String> acceptable,
+                              String expectedSeverity, String actualType, String actualSeverity,
+                              String summary, String rootCause, boolean parseSuccess) {
+        boolean typeMatch = errorTypeAccepted(expectedType, acceptable, actualType);
         boolean severityMatch = expectedSeverity != null && expectedSeverity.equals(actualSeverity);
         String haystack = ((summary == null ? "" : summary) + "\n" + (rootCause == null ? "" : rootCause))
                 .toLowerCase(Locale.ROOT);
@@ -172,6 +242,50 @@ public final class AiDiagnosisEvalRunner {
             }
         }
         return new Score(typeMatch, severityMatch, matched != null, matched, parseSuccess);
+    }
+
+    static boolean errorTypeAccepted(String expectedType, List<String> acceptable, String actualType) {
+        if (actualType == null || actualType.isEmpty()) {
+            return false;
+        }
+        if (expectedType != null && expectedType.equals(actualType)) {
+            return true;
+        }
+        if (acceptable == null) {
+            return false;
+        }
+        for (String candidate : acceptable) {
+            if (actualType.equals(candidate)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 重写总报告时保留手工追加的 Held-out evaluation 一节。生成正文里没有这一节。
+     */
+    static String withPreservedHoldout(String generated, String existing) {
+        if (existing == null) {
+            return generated;
+        }
+        int idx = existing.indexOf("## Held-out evaluation");
+        if (idx < 0) {
+            return generated;
+        }
+        return generated.stripTrailing() + "\n\n" + existing.substring(idx).stripTrailing() + "\n";
+    }
+
+    private static String withPreservedHoldout(String generated) throws IOException {
+        Path report = Path.of("reports", "ai-diagnosis-eval.md");
+        if (!Files.isRegularFile(report)) {
+            return generated;
+        }
+        return withPreservedHoldout(generated, Files.readString(report, StandardCharsets.UTF_8));
+    }
+
+    private static boolean rewriteReportEnabled() {
+        return !"false".equalsIgnoreCase(System.getProperty("ai.eval.rewriteReport", "true").trim());
     }
 
     public static String redact(String text, Collection<String> secrets) {
@@ -216,12 +330,13 @@ public final class AiDiagnosisEvalRunner {
             Score score = parsed == null
                     ? new Score(false, false, false, null, false)
                     : score(evalCase.expected().rootCauseKeywords(), evalCase.expected().errorType(),
+                    evalCase.expected().acceptable(),
                     evalCase.expected().severity(), parsed.errorType(), parsed.severity(),
                     parsed.summary(), parsed.rootCause(), !parsed.fallback());
             CaseResult row = new CaseResult(evalCase, parsed, score, latencyMs, provider, model, error);
             rows.add(row);
-            System.out.printf("%-22s type=%s sev=%s kw=%s parse=%s %5d ms %s%n",
-                    evalCase.id(), mark(score.typeMatch()), mark(score.severityMatch()),
+            System.out.printf("%-28s type=%s sev=%s kw=%s parse=%s %5d ms %s%n",
+                    evalCase.id(), typeCell(row), mark(score.severityMatch()),
                     mark(score.keywordHit()), mark(score.parseSuccess()), latencyMs,
                     error.isEmpty() ? provider : "ERROR");
             System.out.flush();
@@ -239,7 +354,7 @@ public final class AiDiagnosisEvalRunner {
     }
 
     private void printTable(RunResult result) {
-        System.out.printf("%-22s %-6s %-6s %-6s %-6s %8s%n",
+        System.out.printf("%-28s %-6s %-6s %-6s %-6s %8s%n",
                 "case", "type", "sev", "kw", "parse", "ms");
         int type = 0;
         int severity = 0;
@@ -247,8 +362,8 @@ public final class AiDiagnosisEvalRunner {
         int parse = 0;
         long latency = 0;
         for (CaseResult row : result.rows()) {
-            System.out.printf("%-22s %-6s %-6s %-6s %-6s %8d%n",
-                    row.id(), mark(row.score().typeMatch()), mark(row.score().severityMatch()),
+            System.out.printf("%-28s %-6s %-6s %-6s %-6s %8d%n",
+                    row.id(), typeCell(row), mark(row.score().severityMatch()),
                     mark(row.score().keywordHit()), mark(row.score().parseSuccess()), row.latencyMs());
             type += row.score().typeMatch() ? 1 : 0;
             severity += row.score().severityMatch() ? 1 : 0;
@@ -258,8 +373,16 @@ public final class AiDiagnosisEvalRunner {
         }
         int n = result.rows().size();
         long mean = n == 0 ? 0 : latency / n;
-        System.out.printf("%-22s %-6s %-6s %-6s %-6s %8d%n",
+        System.out.printf("%-28s %-6s %-6s %-6s %-6s %8d%n",
                 "TOTAL " + n, ratio(type, n), ratio(severity, n), ratio(keyword, n), ratio(parse, n), mean);
+    }
+
+    /** Y 精确命中期望 errorType，A 命中 acceptable 中的其他枚举，N 未命中。合计仍把 A 算作命中。 */
+    private static String typeCell(CaseResult row) {
+        if (!row.score().typeMatch()) {
+            return "N";
+        }
+        return row.primaryTypeMatch() ? "Y" : "A";
     }
 
     private static String renderReport(Path runsDir, ObjectMapper mapper) throws IOException {
@@ -283,7 +406,7 @@ public final class AiDiagnosisEvalRunner {
         md.append("# AI diagnosis evaluation\n\n");
         md.append("Calls `DiagnosisService.diagnosisSystemPrompt`, `diagnosisUserPrompt`, and `parseModelContent`, ");
         md.append("then `AIRouter.complete` with JSON mode. No Docker and no diagnosis cache.\n\n");
-        md.append("Scores are independent: errorType exact match, severity exact match, ");
+        md.append("Scores are independent: errorType match against the expected value, or against that case's acceptable list when present; severity exact match, ");
         md.append("any rootCause/summary keyword (case-insensitive), parse success (`fallback=false`), latency.\n\n");
         md.append("The 14 logs are shorter than 8000 characters, so trimming does not change the bytes sent for this set. ");
         md.append("Over the cap, the prompt keeps a short preamble, the first exception (bounded stack frames plus every `Caused by` line), and the tail.\n\n");
@@ -332,11 +455,22 @@ public final class AiDiagnosisEvalRunner {
             md.append("<details><summary>System prompt (").append(label).append(")</summary>\n\n````\n");
             md.append(first.systemPrompt() == null ? "" : first.systemPrompt()).append("\n````\n\n</details>\n\n");
         }
-        if (labels.size() >= 2) {
+        List<String> compared = comparisonLabels(labels);
+        if (compared.size() >= 2) {
             md.append("## Before / after\n\n");
-            appendComparison(md, byLabel, labels);
+            appendComparison(md, byLabel, compared);
         }
         return md.toString();
+    }
+
+    /**
+     * 原来的对照只比较 baseline 与 tuned。其后追加的标签仍各写一节，但不改这张表。
+     */
+    private static List<String> comparisonLabels(List<String> labels) {
+        if (labels.contains("baseline") && labels.contains("tuned")) {
+            return List.of("baseline", "tuned");
+        }
+        return labels;
     }
 
     private static void appendScoreTable(StringBuilder md, List<CaseResult> rows) {
@@ -561,7 +695,35 @@ public final class AiDiagnosisEvalRunner {
         if (lineCount < 20 || lineCount > 80) {
             throw new IllegalStateException(fileName + " 日志行数 " + lineCount + " 不在 20 到 80");
         }
-        return new EvalCase(id, description, log, new Expect(errorType, severity, List.copyOf(words)));
+        List<String> acceptable = new ArrayList<>();
+        JsonNode acceptableNode = expected.get("acceptable");
+        if (acceptableNode != null && !acceptableNode.isNull()) {
+            if (!acceptableNode.isArray()) {
+                throw new IllegalStateException(fileName + " 的 acceptable 必须是数组");
+            }
+            for (JsonNode item : acceptableNode) {
+                String type = item.asText("").trim();
+                if (!DiagnosisService.diagnosisErrorTypes().contains(type)) {
+                    throw new IllegalStateException(fileName + " 的 acceptable 含有非法 errorType: " + type);
+                }
+                if (!acceptable.contains(type)) {
+                    acceptable.add(type);
+                }
+            }
+        }
+        String labelNote = text(expected, "labelNote");
+        boolean extraAcceptable = false;
+        for (String type : acceptable) {
+            if (!type.equals(errorType)) {
+                extraAcceptable = true;
+                break;
+            }
+        }
+        if (extraAcceptable && labelNote.isEmpty()) {
+            throw new IllegalStateException(fileName + " 有多个可接受 errorType 时必须写 labelNote");
+        }
+        return new EvalCase(id, description, log,
+                new Expect(errorType, severity, List.copyOf(words), List.copyOf(acceptable), labelNote));
     }
 
     static AIProperties propertiesFromEnv(Map<String, String> env) {
@@ -802,7 +964,18 @@ public final class AiDiagnosisEvalRunner {
     public record EvalCase(String id, String description, String log, Expect expected) {
     }
 
-    public record Expect(String errorType, String severity, List<String> rootCauseKeywords) {
+    public record Expect(String errorType, String severity, List<String> rootCauseKeywords,
+                         List<String> acceptable, String labelNote) {
+
+        public Expect(String errorType, String severity, List<String> rootCauseKeywords) {
+            this(errorType, severity, rootCauseKeywords, List.of(), "");
+        }
+
+        public Expect {
+            rootCauseKeywords = rootCauseKeywords == null ? List.of() : List.copyOf(rootCauseKeywords);
+            acceptable = acceptable == null ? List.of() : List.copyOf(acceptable);
+            labelNote = labelNote == null ? "" : labelNote;
+        }
     }
 
     public record Score(boolean typeMatch, boolean severityMatch, boolean keywordHit, String keywordMatched,
@@ -818,7 +991,8 @@ public final class AiDiagnosisEvalRunner {
 
     private record CaseResult(String id, String expectedType, String actualType, String expectedSeverity,
                               String actualSeverity, String summary, String rootCause, Score score,
-                              long latencyMs, String provider, String model, String error) {
+                              long latencyMs, String provider, String model, String error,
+                              List<String> acceptable, String labelNote, boolean primaryTypeMatch) {
 
         CaseResult(EvalCase evalCase, DiagnosisService.ModelDiagnosis parsed, Score score, long latencyMs,
                    String provider, String model, String error) {
@@ -833,7 +1007,10 @@ public final class AiDiagnosisEvalRunner {
                     latencyMs,
                     provider,
                     model,
-                    error == null ? "" : error);
+                    error == null ? "" : error,
+                    evalCase.expected().acceptable(),
+                    evalCase.expected().labelNote(),
+                    parsed != null && evalCase.expected().errorType().equals(parsed.errorType()));
         }
 
         ObjectNode toJson(ObjectMapper mapper) {
@@ -841,9 +1018,17 @@ public final class AiDiagnosisEvalRunner {
             node.put("id", id);
             node.put("expectedErrorType", expectedType);
             node.put("actualErrorType", actualType);
+            ArrayNode acceptableNodes = node.putArray("acceptableErrorTypes");
+            if (acceptable != null) {
+                for (String type : acceptable) {
+                    acceptableNodes.add(type);
+                }
+            }
+            node.put("labelNote", labelNote == null ? "" : labelNote);
             node.put("expectedSeverity", expectedSeverity);
             node.put("actualSeverity", actualSeverity);
             node.put("typeMatch", score.typeMatch());
+            node.put("primaryTypeMatch", primaryTypeMatch);
             node.put("severityMatch", score.severityMatch());
             node.put("keywordHit", score.keywordHit());
             node.put("keywordMatched", score.keywordMatched());
@@ -864,10 +1049,22 @@ public final class AiDiagnosisEvalRunner {
                     node.path("keywordHit").asBoolean(false),
                     text(node, "keywordMatched"),
                     node.path("parseSuccess").asBoolean(false));
+            List<String> acceptable = new ArrayList<>();
+            JsonNode acceptableNode = node.get("acceptableErrorTypes");
+            if (acceptableNode != null && acceptableNode.isArray()) {
+                for (JsonNode item : acceptableNode) {
+                    acceptable.add(item.asText(""));
+                }
+            }
+            String expectedType = text(node, "expectedErrorType");
+            String actualType = text(node, "actualErrorType");
+            boolean primaryTypeMatch = node.has("primaryTypeMatch")
+                    ? node.path("primaryTypeMatch").asBoolean(false)
+                    : !expectedType.isEmpty() && expectedType.equals(actualType);
             return new CaseResult(
                     text(node, "id"),
-                    text(node, "expectedErrorType"),
-                    text(node, "actualErrorType"),
+                    expectedType,
+                    actualType,
                     text(node, "expectedSeverity"),
                     text(node, "actualSeverity"),
                     text(node, "summary"),
@@ -876,7 +1073,10 @@ public final class AiDiagnosisEvalRunner {
                     node.path("latencyMs").asLong(0),
                     text(node, "provider"),
                     text(node, "model"),
-                    text(node, "error"));
+                    text(node, "error"),
+                    List.copyOf(acceptable),
+                    text(node, "labelNote"),
+                    primaryTypeMatch);
         }
     }
 

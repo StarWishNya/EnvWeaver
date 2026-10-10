@@ -257,3 +257,97 @@ severity 必须是 LOW、MEDIUM、HIGH、CRITICAL 之一：
 | missing-property | 2/2 | 1/2 | 2/2 | 2/2 | 2/2 | 2/2 | 2/2 | 2/2 |
 
 | total | 19/28 | 17/28 | 28/28 | 27/28 | 28/28 | 28/28 | 28/28 | 28/28 |
+
+
+## Held-out evaluation
+
+Twelve new logs in `src/test/resources/ai-eval/holdout`, not used to tune the prompt. Same prompt, parser, and provider order as the tuned runs (`AI_PROVIDER_ORDER=deepseek,ollama` from the environment; every call was answered by `deepseek` / `deepseek-flash`; Ollama was configured and unused). Raw rows: `reports/ai-eval-holdout/holdout-1.json` (2026-10-10 16:12:32) and `holdout-2.json` (2026-10-10 16:12:53). No API key is stored in those files.
+
+`errorType` scoring now accepts a case's `acceptable` list as well as the primary label. In the tables, **Y** is the primary label, **A** is another listed label, **N** is neither. The runner's type total counts **A** as a hit. A strict column below counts only **Y**, which is how the original 14 cases were scored (none of them have an `acceptable` list).
+
+Labels were assigned from the published taxonomy, not from the tuned prompt's example sentences. Where rules 1–5 do not name the failure, the primary label is `UNKNOWN` and the nearby operational label is listed as acceptable, with the reason in `labelNote`.
+
+### Run 1
+
+| case | expected type | acceptable | actual type | type | expected sev | actual sev | sev | keyword | parse | ms |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| kafka-rebalance-timeout | TIMEOUT |  | TIMEOUT | Y | HIGH | HIGH | Y | Y | Y | 2335 |
+| ssl-pkix-path | UNKNOWN | UNKNOWN, CONFIG_ERROR, NETWORK_ERROR | CONFIG_ERROR | A | HIGH | HIGH | Y | Y | Y | 1712 |
+| liquibase-checksum | UNKNOWN | UNKNOWN, CONFIG_ERROR | UNKNOWN | Y | HIGH | HIGH | Y | Y | Y | 1929 |
+| too-many-open-files | RESOURCE_EXHAUSTED |  | RESOURCE_EXHAUSTED | Y | HIGH | CRITICAL | N | Y | Y | 1887 |
+| thread-pool-rejected | RESOURCE_EXHAUSTED |  | RESOURCE_EXHAUSTED | Y | HIGH | HIGH | Y | Y | Y | 1326 |
+| grpc-unavailable | NETWORK_ERROR | NETWORK_ERROR, DEPENDENCY_FAILURE | NETWORK_ERROR | Y | HIGH | HIGH | Y | Y | Y | 1550 |
+| mysql-deadlock | UNKNOWN | UNKNOWN, DEPENDENCY_FAILURE | UNKNOWN | Y | HIGH | HIGH | Y | Y | Y | 1779 |
+| json-downstream-body | DEPENDENCY_FAILURE | DEPENDENCY_FAILURE, UNKNOWN | UNKNOWN | A | HIGH | HIGH | Y | Y | Y | 1839 |
+| readiness-probe | TIMEOUT | TIMEOUT, DEPENDENCY_FAILURE | TIMEOUT | Y | HIGH | HIGH | Y | Y | Y | 2072 |
+| selenium-element-missing | UNKNOWN |  | UNKNOWN | Y | MEDIUM | MEDIUM | Y | Y | Y | 1522 |
+| jar-method-conflict | DEPENDENCY_FAILURE | DEPENDENCY_FAILURE, UNKNOWN | DEPENDENCY_FAILURE | Y | HIGH | HIGH | Y | Y | Y | 1295 |
+| file-permission-denied | UNKNOWN | UNKNOWN, CONFIG_ERROR | CONFIG_ERROR | A | HIGH | HIGH | Y | Y | Y | 1447 |
+
+- **too-many-open-files** is the only severity miss: `Too many open files` at fd 1021/1024 was called CRITICAL. The taxonomy reserves CRITICAL for memory or disk exhaustion; a live request that fails on the open-file limit is HIGH.
+- **ssl-pkix-path** primary is UNKNOWN. The model called it CONFIG_ERROR because the JVM trust store has no path to the peer certificate. TCP had already connected.
+- **json-downstream-body** primary is DEPENDENCY_FAILURE. The model called it UNKNOWN: HTTP 200, then `UnrecognizedPropertyException` on `display_name`. It treated that as a client DTO defect, which the acceptable list allows.
+- **file-permission-denied** primary is UNKNOWN. The model called it CONFIG_ERROR for `AccessDeniedException: Permission denied` on `/var/lib/acme/exports`. Not disk-full and not a rejected database password.
+
+### Run 2
+
+| case | expected type | acceptable | actual type | type | expected sev | actual sev | sev | keyword | parse | ms |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| kafka-rebalance-timeout | TIMEOUT |  | TIMEOUT | Y | HIGH | HIGH | Y | Y | Y | 2042 |
+| ssl-pkix-path | UNKNOWN | UNKNOWN, CONFIG_ERROR, NETWORK_ERROR | CONFIG_ERROR | A | HIGH | HIGH | Y | Y | Y | 1509 |
+| liquibase-checksum | UNKNOWN | UNKNOWN, CONFIG_ERROR | UNKNOWN | Y | HIGH | HIGH | Y | Y | Y | 1939 |
+| too-many-open-files | RESOURCE_EXHAUSTED |  | RESOURCE_EXHAUSTED | Y | HIGH | HIGH | Y | Y | Y | 1820 |
+| thread-pool-rejected | RESOURCE_EXHAUSTED |  | RESOURCE_EXHAUSTED | Y | HIGH | HIGH | Y | Y | Y | 1628 |
+| grpc-unavailable | NETWORK_ERROR | NETWORK_ERROR, DEPENDENCY_FAILURE | NETWORK_ERROR | Y | HIGH | HIGH | Y | Y | Y | 1598 |
+| mysql-deadlock | UNKNOWN | UNKNOWN, DEPENDENCY_FAILURE | UNKNOWN | Y | HIGH | HIGH | Y | Y | Y | 1841 |
+| json-downstream-body | DEPENDENCY_FAILURE | DEPENDENCY_FAILURE, UNKNOWN | UNKNOWN | A | HIGH | HIGH | Y | Y | Y | 1716 |
+| readiness-probe | TIMEOUT | TIMEOUT, DEPENDENCY_FAILURE | DEPENDENCY_FAILURE | A | HIGH | HIGH | Y | Y | Y | 1549 |
+| selenium-element-missing | UNKNOWN |  | UNKNOWN | Y | MEDIUM | MEDIUM | Y | Y | Y | 1741 |
+| jar-method-conflict | DEPENDENCY_FAILURE | DEPENDENCY_FAILURE, UNKNOWN | DEPENDENCY_FAILURE | Y | HIGH | HIGH | Y | Y | Y | 2014 |
+| file-permission-denied | UNKNOWN | UNKNOWN, CONFIG_ERROR | CONFIG_ERROR | A | HIGH | HIGH | Y | Y | Y | 1346 |
+
+- **readiness-probe** is the only type flip. Run 1 followed the probe deadline (`context deadline exceeded`) to TIMEOUT. Run 2 followed `/ready` HTTP 503 `payment:DOWN` to DEPENDENCY_FAILURE. Both are on the acceptable list. Severity stayed HIGH.
+- **ssl-pkix-path**, **json-downstream-body**, and **file-permission-denied** repeated run 1's non-primary labels. Those three are stable disagreements with the primary label, not noise.
+
+### Hold-out totals
+
+| metric | run 1 | run 2 | both | rate |
+| --- | --- | --- | --- | --- |
+| errorType, primary or acceptable | 12/12 | 12/12 | 24/24 | 100.0% |
+| errorType, primary only | 9/12 | 8/12 | 17/24 | 70.8% |
+| severity | 11/12 | 12/12 | 23/24 | 95.8% |
+| keyword | 12/12 | 12/12 | 24/24 | 100.0% |
+| parse | 12/12 | 12/12 | 24/24 | 100.0% |
+
+Mean latency 1724 ms (run 1) and 1728 ms (run 2). Variance: errorType disagrees on `readiness-probe`; severity disagrees on `too-many-open-files`.
+
+### Comparison with the tuned set
+
+| set | runs | errorType | severity | keyword | parse | mean ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| tuned, original scoring (exact type) | 2 x 14, recorded earlier | 28/28 (100%) | 28/28 | 28/28 | 28/28 | 1473 |
+| tuned recheck, same 14 logs, this session | 1 x 14, `reports/ai-eval-runs/tuned-recheck-1.json`, 2026-10-10 16:13:25 | 14/14 (100%) | 14/14 | 14/14 | 14/14 | 1589 |
+| hold-out, counting acceptable | 2 x 12 | 24/24 (100%) | 23/24 (95.8%) | 24/24 | 24/24 | 1726 |
+| hold-out, primary label only | 2 x 12 | 17/24 (70.8%) | 23/24 (95.8%) | 24/24 | 24/24 | 1726 |
+
+The recheck shows the tuned 14 are still solved under the same provider an hour later, so the 28/28 result was not a one-off. It does not transfer as an exact-label score. On the four hold-out cases with a single legal type (Kafka rebalance timeout, open-file limit, rejected thread pool, Selenium missing element) the model was 8/8 on type and 7/8 on severity. The drop to 17/24 is concentrated on labels the six-value taxonomy does not name cleanly, not on a failure to read the stack.
+
+Keyword rate is not evidence of generalization. The prompt already requires quoting the exception class or the error phrase, and the keywords are those phrases.
+
+### What the taxonomy and prompt handle poorly
+
+- **CONFIG_ERROR is narrower than the model's use of it.** The prompt allows it only for a missing setting, an unresolved placeholder, or a rejected username and password, and it lists port-in-use, NPE, assertion, and concurrent modification as not CONFIG_ERROR. Those negatives held on the recheck. They do not stop the model from calling a PKIX trust-path failure and a filesystem `Permission denied` CONFIG_ERROR, twice each. Both are operational misconfiguration; neither is in the closed list, so the primary label is UNKNOWN. The model will not pick UNKNOWN when a nearby "this environment is wrong" label exists.
+- **DEPENDENCY_FAILURE does not cover a connected HTTP 200 with a body the client cannot bind.** Both runs called the Jackson `UnrecognizedPropertyException` UNKNOWN and said the local `UserRecord` was missing `display_name`. The prompt's dependency examples are a missing class and HTTP 500/502/503. A 200 plus a schema mismatch does not match them. `NoSuchMethodError` from `commons-codec` 1.11 versus a 1.15 method did match, both runs, by analogy with `ClassNotFoundException` / `NoClassDefFoundError`. Linkage errors generalize; response-contract errors do not.
+- **A failure that contains both a deadline and a 503 is not stable.** The readiness log has `context deadline exceeded` and six HTTP 503 answers for `payment:DOWN`. Rule order says TIMEOUT wins if the direct cause is the deadline. Run 1 did that. Run 2 called the payment component a dependency failure. The prompt's "stop at the first matching rule" instruction is not enough when both phrases are in the same log.
+- **File-handle exhaustion is pulled toward CRITICAL.** The type rule names 文件句柄 next to memory and disk. The severity rule says CRITICAL only for memory or disk, and that a failed live request is HIGH. Run 1 promoted `Too many open files` to CRITICAL; run 2 stayed HIGH. The rejected thread pool, which the type rule also lists, stayed HIGH both times. The severity boundary is learnable but not stable for EMFILE.
+- **Categories the prompt already names did generalize.** Kafka `TimeoutException` on rebalance stayed TIMEOUT, not a consumer-group dependency failure. gRPC `UNAVAILABLE` whose deepest cause is `Connection refused` stayed NETWORK_ERROR, not DEPENDENCY_FAILURE. MySQL `Deadlock found when trying to get lock` stayed UNKNOWN both times; the model explicitly rejected timeout, resource, config, network, and dependency. Liquibase checksum mismatch stayed UNKNOWN rather than CONFIG_ERROR. Selenium `NoSuchElementException` in an E2E test stayed UNKNOWN / MEDIUM, by analogy with assertion failures, even though that exception is not in the example list.
+
+### Recommendations
+
+Not implemented. Do not paste these twelve logs into the prompt and score them again; that repeats the original 14-case mistake. If the prompt changes, keep this directory frozen and add a third set.
+
+1. Decide the CONFIG_ERROR boundary in one sentence that names trust-store / PKIX failures and filesystem `Permission denied`, either as in or as out. The current negative list only blocks the training misses. Leaving them as UNKNOWN predicts a label the model will not emit.
+2. Say whether HTTP 200 plus a JSON deserialization error is DEPENDENCY_FAILURE or UNKNOWN. The 5xx examples do not decide it. One sentence is enough; a new errorType is not required unless product code needs to branch on it.
+3. For readiness and similar mixed logs, state the winner: probe deadline means TIMEOUT even when the body is 503, or a 503 from a named component means DEPENDENCY_FAILURE even when the probe times out. Until that sentence exists, score both and do not treat the flip as a regression.
+4. Split the resource sentences. Type: file descriptors and a rejected pool are RESOURCE_EXHAUSTED. Severity: CRITICAL stays memory and disk only; EMFILE and `RejectedExecutionException` on a live request are HIGH. The type rule currently lists 文件句柄 in the same breath as heap and disk, which is why one run marked EMFILE CRITICAL.
+5. Keep reporting primary and acceptable separately. 24/24 with alternates counted is a taxonomy-fit number. 17/24 is the exact-label number comparable to the tuned 28/28.

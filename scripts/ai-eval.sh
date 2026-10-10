@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Live AI diagnosis eval. No Docker. Default surefire does not run this.
-# Usage: scripts/ai-eval.sh [label] [runs]
-#   label  baseline or tuned (default tuned)
-#   runs   repetitions of the full case set (default 2)
+# Usage: scripts/ai-eval.sh [label] [runs] [cases-dir]
+#   label      run label (default tuned)
+#   runs       repetitions of the case set (default 2)
+#   cases-dir  filesystem path or classpath dir (default ai-eval/cases)
+# Optional environment:
+#   AI_EVAL_RUNS_DIR        JSON output directory (default reports/ai-eval-runs)
+#   AI_EVAL_REWRITE_REPORT  true (default) or false. false leaves reports/ai-diagnosis-eval.md
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -22,5 +26,17 @@ fi
 
 LABEL="${1:-tuned}"
 RUNS="${2:-2}"
+CASES="${3:-}"
 
-exec mvn -B -o -Pai-eval test -Dai.eval.label="$LABEL" -Dai.eval.runs="$RUNS"
+args=(mvn -B -o -Pai-eval test -Dai.eval.label="$LABEL" -Dai.eval.runs="$RUNS")
+if [[ -n "$CASES" ]]; then
+  args+=(-Dai.eval.cases="$CASES")
+fi
+if [[ -n "${AI_EVAL_RUNS_DIR:-}" ]]; then
+  args+=(-Dai.eval.runsDir="$AI_EVAL_RUNS_DIR")
+fi
+if [[ -n "${AI_EVAL_REWRITE_REPORT:-}" ]]; then
+  args+=(-Dai.eval.rewriteReport="$AI_EVAL_REWRITE_REPORT")
+fi
+
+exec "${args[@]}"
