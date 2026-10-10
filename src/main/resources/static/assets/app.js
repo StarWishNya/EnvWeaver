@@ -519,17 +519,21 @@ function buildCreateForm(gen, reload) {
   var serviceId = el('input', { name: 'serviceId', maxlength: '64', autocomplete: 'off' });
   var testType = selectBox('testType', TEST_TYPES, 'UNIT_TEST');
   var priority = el('input', { name: 'priority', type: 'number', min: '1', max: '10', step: '1', value: '5' });
-  var depText = el('input', { name: 'depText', placeholder: '例如 mysql:8.0，逗号分隔', autocomplete: 'off' });
+  var template = selectBox('template', [['', '不使用模板']], '');
+  var templateHint = text('p', '', { class: 'hint span-all' });
+  var depText = el('input', { name: 'depText', placeholder: '例如 mysql:8.0，逗号分隔；与模板同种类时以这里为准', autocomplete: 'off' });
   var checks = el('div', { class: 'checks' });
-  DEPENDENCIES.forEach(function (name) {
-    add(checks, add(el('label'), el('input', { type: 'checkbox', name: 'dep', value: name }), document.createTextNode(name)));
-  });
+  var versionHint = text('p', '正在加载中间件版本…', { class: 'hint span-all' });
   var submit = text('button', '创建任务', { type: 'submit', class: 'btn btn-primary' });
   var form = add(el('form', { class: 'card' }), text('h2', '创建任务'), add(el('div', { class: 'form-grid' }),
     field('任务编码', taskCode), field('服务标识', serviceId), field('测试类型', testType),
     field('优先级（1 到 10）', priority),
+    field('环境模板', template, 'field span-all'),
+    templateHint,
     add(el('div', { class: 'field span-all' }), text('span', '依赖'), checks),
+    add(el('div', { class: 'field span-all' }), text('span', '可用版本'), versionHint),
     field('其他依赖', depText, 'field span-all'), submit));
+  loadCreateCatalog(gen, template, checks, versionHint, templateHint);
   on(form, 'submit', function (event) {
     event.preventDefault();
     var code = taskCode.value.trim();
@@ -541,19 +545,95 @@ function buildCreateForm(gen, reload) {
       showError('优先级必须是 1 到 10 的整数');
       return;
     }
+    var payload = {
+      taskCode: code,
+      serviceId: service,
+      testType: testType.value,
+      dependencies: collectDeps(form),
+      priority: level
+    };
+    if (template.value) payload.template = template.value;
     submit.disabled = true;
-    api('/api/tasks', {
-      method: 'POST',
-      body: { taskCode: code, serviceId: service, testType: testType.value, dependencies: collectDeps(form), priority: level }
-    }).then(function () {
+    api('/api/tasks', { method: 'POST', body: payload }).then(function () {
       if (stale(gen)) return;
       taskCode.value = '';
+      depText.value = '';
+      template.selectedIndex = 0;
+      form.querySelectorAll('input[name="dep"]').forEach(function (input) { input.checked = false; });
       showOk('任务已创建');
       return reload();
     }).catch(function (error) { if (!stale(gen)) report(error); })
       .then(function () { submit.disabled = false; });
   });
   return form;
+}
+
+function loadCreateCatalog(gen, templateSelect, checks, versionHint, templateHint) {
+  api('/api/catalog/templates').then(function (res) {
+    if (stale(gen)) return;
+    var rows = res.data && Array.isArray(res.data.templates) ? res.data.templates : [];
+    rows.forEach(function (item) {
+      if (!item || typeof item.name !== 'string' || !item.name.trim()) return;
+      var name = item.name.trim();
+      var display = typeof item.displayName === 'string' && item.displayName.trim() ? item.displayName.trim() : name;
+      var deps = Array.isArray(item.dependencies) ? item.dependencies.filter(function (dep) {
+        return dep != null && String(dep).trim() !== '';
+      }).map(function (dep) { return String(dep); }) : [];
+      var label = display + '（' + name + '）';
+      if (deps.length) label += '：' + deps.join('、');
+      templateSelect.appendChild(text('option', label, { value: name }));
+    });
+    if (!rows.length) templateHint.textContent = '没有可用模板';
+  }).catch(function () {
+    if (!stale(gen)) templateHint.textContent = '模板列表加载失败，仍可手写依赖';
+  });
+
+  api('/api/catalog/middleware').then(function (res) {
+    if (stale(gen)) return;
+    var kinds = res.data && Array.isArray(res.data.kinds) ? res.data.kinds : [];
+    var boxes = [];
+    var lines = [];
+    kinds.forEach(function (kind) {
+      if (!kind || typeof kind.kind !== 'string' || !kind.kind.trim()) return;
+      var name = kind.kind.trim();
+      boxes.push(add(el('label'), el('input', { type: 'checkbox', name: 'dep', value: name }), document.createTextNode(name)));
+      var line = formatKindHint(kind);
+      if (line) lines.push(line);
+    });
+    if (boxes.length) checks.replaceChildren.apply(checks, boxes);
+    versionHint.textContent = lines.length ? lines.join('；') : '目录里没有中间件';
+  }).catch(function () {
+    if (stale(gen)) return;
+    DEPENDENCIES.forEach(function (name) {
+      checks.appendChild(add(el('label'), el('input', { type: 'checkbox', name: 'dep', value: name }), document.createTextNode(name)));
+    });
+    versionHint.textContent = '中间件版本加载失败，已使用内置列表';
+  });
+}
+
+function formatKindHint(kind) {
+  if (!kind || typeof kind.kind !== 'string' || !kind.kind.trim()) return '';
+  var versions = Array.isArray(kind.versions) ? kind.versions : [];
+  var parts = [];
+  versions.forEach(function (version) {
+    if (!version || version.version == null || String(version.version).trim() === '') return;
+    var piece = String(version.version);
+    var extras = [];
+    if (Array.isArray(version.aliases) && version.aliases.length) {
+      var aliases = [];
+      version.aliases.forEach(function (alias) {
+        if (alias != null && String(alias).trim() !== '') aliases.push(String(alias));
+      });
+      if (aliases.length) extras.push('别名 ' + aliases.join('、'));
+    }
+    if (version.image) extras.push(String(version.image));
+    if (version.containerPort != null && version.containerPort !== '') extras.push('端口 ' + version.containerPort);
+    if (extras.length) piece += '（' + extras.join('，') + '）';
+    parts.push(piece);
+  });
+  var line = kind.kind.trim() + ' 默认 ' + (kind.defaultVersion == null || kind.defaultVersion === '' ? '—' : String(kind.defaultVersion));
+  if (parts.length) line += '：' + parts.join('、');
+  return line;
 }
 
 function collectDeps(form) {

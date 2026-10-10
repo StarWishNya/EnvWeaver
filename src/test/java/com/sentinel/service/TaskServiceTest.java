@@ -12,6 +12,8 @@ import com.sentinel.enums.ErrorCode;
 import com.sentinel.event.TaskCreatedEvent;
 import com.sentinel.event.TaskStatusChangedEvent;
 import com.sentinel.mapper.TaskMapper;
+import com.sentinel.service.provision.DependencyCatalog;
+import com.sentinel.service.provision.TemplateCatalog;
 import com.sentinel.testutil.CreateTaskRequestBuilder;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
@@ -51,6 +53,12 @@ public class TaskServiceTest {
 
     @Mock
     private ApplicationEventPublisher eventPublisher;
+
+    @Mock
+    private TemplateCatalog templateCatalog;
+
+    @Mock
+    private DependencyCatalog dependencyCatalog;
 
     @InjectMocks
     private TaskService taskService;

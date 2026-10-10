@@ -14,12 +14,12 @@ public class ProvisioningFailedException extends BusinessException {
     private final Long environmentId;
 
     public ProvisioningFailedException(ErrorCode errorCode, String message, Long environmentId) {
-        super(errorCode, message);
+        super(errorCode, message, null);
         this.environmentId = environmentId;
     }
 
     public ProvisioningFailedException(Integer code, String message, Long environmentId) {
-        super(code, message);
+        super(code, message, null);
         this.environmentId = environmentId;
     }
 }

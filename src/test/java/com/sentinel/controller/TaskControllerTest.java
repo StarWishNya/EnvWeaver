@@ -36,7 +36,9 @@ import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -705,5 +707,45 @@ public class TaskControllerTest {
 
         verify(taskService, never()).getTaskLogs(eq(1L), anyInt(), eq("yesterday"));
         verify(taskService).getTaskLogs(1L, 20, "2026-10-09T08:00:00Z");
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("创建任务把模板原样交给服务")
+    public void shouldPassTemplateToService() throws Exception {
+        Task task = TaskBuilder.aTask().withId(3L).withTaskCode("TPL-1").pending().build();
+        when(taskService.createTask(any())).thenReturn(task);
+
+        mockMvc.perform(post("/api/tasks")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"taskCode\":\"TPL-1\",\"serviceId\":\"svc\",\"testType\":\"UNIT_TEST\","
+                                + "\"template\":\"data-stack\",\"dependencies\":[]}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.code").value(200));
+
+        verify(taskService).createTask(argThat(request ->
+                "data-stack".equals(request.getTemplate()) && request.getDependencies().isEmpty()));
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("未知依赖版本返回 400，并在 data 里列出可选版本")
+    public void shouldReturnCandidatesWhenDependencyVersionIsUnknown() throws Exception {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("candidates", List.of("5.7", "8.0"));
+        when(taskService.createTask(any())).thenThrow(new BusinessException(
+                ErrorCode.VALIDATION_ERROR,
+                "未知依赖版本: mysql:9.9，可选版本: 5.7, 8.0",
+                data));
+
+        mockMvc.perform(post("/api/tasks")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"taskCode\":\"BAD-1\",\"serviceId\":\"svc\",\"testType\":\"UNIT_TEST\","
+                                + "\"dependencies\":[\"mysql:9.9\"]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value("未知依赖版本: mysql:9.9，可选版本: 5.7, 8.0"))
+                .andExpect(jsonPath("$.data.candidates[0]").value("5.7"))
+                .andExpect(jsonPath("$.data.candidates[1]").value("8.0"));
     }
 }

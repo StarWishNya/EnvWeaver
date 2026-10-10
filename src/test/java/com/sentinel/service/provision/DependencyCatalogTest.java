@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
@@ -76,24 +77,26 @@ class DependencyCatalogTest {
 
         assertThat(catalog.require("mongodb").getImage()).isEqualTo("mongo:7");
         assertThat(catalog.require("mongodb").getContainerPort()).isEqualTo(27017);
-        assertThat(catalog.require("rabbitmq").getImage()).isEqualTo("rabbitmq:3-management-alpine");
-        assertThat(catalog.require("rabbitmq").getContainerPort()).isEqualTo(5672);
-        assertThat(catalog.require("nginx").getImage()).isEqualTo("nginx:alpine");
+        assertThat(catalog.require("nginx").getImage()).isEqualTo("nginx:1.27-alpine");
         assertThat(catalog.require("nginx").getContainerPort()).isEqualTo(80);
+        assertThat(catalog.require("kafka").getImage()).isEqualTo("apache/kafka:3.7.0");
+        assertThat(catalog.require("kafka").getContainerPort()).isEqualTo(9092);
     }
 
     @Test
     @DisplayName("未知依赖在错误信息里点名")
     void unknownDependencyNamesTheToken() {
         BusinessException unknown = catchThrowableOfType(
-                () -> catalog.resolve("[\"kafka\"]"), BusinessException.class);
+                () -> catalog.resolve("[\"oracle\"]"), BusinessException.class);
         assertThat(unknown).isNotNull();
-        assertThat(unknown.getMessage()).isEqualTo("未知依赖: kafka");
+        assertThat(unknown.getMessage()).isEqualTo(
+                "未知依赖: oracle，可选种类: mysql, redis, postgres, mongodb, nginx, kafka");
         assertThat(unknown.getCode()).isEqualTo(ErrorCode.VALIDATION_ERROR.getCode());
 
         assertThatThrownBy(() -> catalog.resolve("mysql, etcd, Kafka:3"))
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("未知依赖: etcd, Kafka:3");
+                .hasMessage("未知依赖: etcd，可选种类: mysql, redis, postgres, mongodb, nginx, kafka; "
+                        + "未知依赖版本: Kafka:3，可选版本: 3.7");
     }
 
     @Test
@@ -122,22 +125,34 @@ class DependencyCatalogTest {
         kafka.setPort(9092);
         properties.getDependencies().put("Kafka", kafka);
 
+        ProvisioningProperties.Dependency memcached = new ProvisioningProperties.Dependency();
+        memcached.setImage("memcached:1.6");
+        memcached.setPort(11211);
+        properties.getDependencies().put("memcached", memcached);
+
         DependencyCatalog overridden = new DependencyCatalog(properties);
         assertThat(overridden.require("mysql").getImage()).isEqualTo("mysql:8.0.36");
         assertThat(overridden.require("mysql").getContainerPort()).isEqualTo(3306);
         assertThat(overridden.require("mysql").getEnvironment()).containsEntry("MYSQL_DATABASE", "test");
         assertThat(overridden.resolve("kafka")).extracting(DependencySpec::getImage).containsExactly("bitnami/kafka:3.7");
+        assertThat(overridden.resolve("mysql:8")).extracting(DependencySpec::getImage).containsExactly("mysql:8.0.36");
+        assertThat(overridden.resolve("mysql:5.7")).extracting(DependencySpec::getImage).containsExactly("mysql:5.7");
+        assertThat(overridden.resolve("memcached, mysql:5.7"))
+                .extracting(DependencySpec::getName, DependencySpec::getImage)
+                .containsExactly(
+                        tuple("memcached", "memcached:1.6"),
+                        tuple("mysql", "mysql:5.7"));
     }
 
     @Test
     @DisplayName("新增依赖缺少镜像或端口时配置无效")
     void incompleteCustomDependencyIsInvalid() {
-        ProvisioningProperties.Dependency kafka = new ProvisioningProperties.Dependency();
-        kafka.setImage("bitnami/kafka:3.7");
-        properties.getDependencies().put("kafka", kafka);
+        ProvisioningProperties.Dependency memcached = new ProvisioningProperties.Dependency();
+        memcached.setImage("memcached:1.6");
+        properties.getDependencies().put("memcached", memcached);
 
         assertThatThrownBy(() -> new DependencyCatalog(properties))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("kafka");
+                .hasMessageContaining("memcached");
     }
 }

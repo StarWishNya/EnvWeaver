@@ -217,7 +217,9 @@ sentinel:
     pending-sweep-interval: 30s
     # 过期环境回收间隔
     reaper-interval: 60s
-  # 按任务依赖启动容器。未写到这里的依赖仍使用代码里的内置目录。
+  # 按任务依赖启动容器。种类和版本在 catalog/middleware.yaml。
+  # dependencies 覆盖同名种类的默认版本；显式的非默认 kind:version 用目录条目。
+  # 目录里没有的种类可以在这里新增，但必须同时给出 image 和 port。
   provisioning:
     ttl: 2h
     port-range: "30000-39999"

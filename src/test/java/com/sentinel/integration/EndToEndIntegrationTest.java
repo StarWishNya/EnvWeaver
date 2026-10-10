@@ -425,6 +425,14 @@ public class EndToEndIntegrationTest {
         assertThat(environment.getStatus()).isEqualTo("ERROR");
         assertThat(environment.getTaskId()).isEqualTo(taskId);
         assertThat(environment.getPortMappings()).isNull();
+        // 过期时间由失败事件的异步监听器缩短。状态先变成 ERROR，不能在缩短之前断言。
+        long expiryDeadline = System.nanoTime() + WAIT.toNanos();
+        while ((environment.getExpiresAt() == null
+                || !environment.getExpiresAt().isBefore(LocalDateTime.now().plusMinutes(45)))
+                && System.nanoTime() < expiryDeadline) {
+            Thread.sleep(40);
+            environment = environmentMapper.selectById(environmentId);
+        }
         assertThat(environment.getExpiresAt()).isNotNull();
         assertThat(environment.getExpiresAt()).isBefore(LocalDateTime.now().plusMinutes(45));
         assertThat(containerMapper.findByEnvironmentId(environmentId)).isEmpty();
