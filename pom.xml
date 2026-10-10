@@ -319,6 +319,9 @@
                 <surefire.excludedGroups>live</surefire.excludedGroups>
                 <ai.eval.label>tuned</ai.eval.label>
                 <ai.eval.runs>2</ai.eval.runs>
+                <ai.eval.cases></ai.eval.cases>
+                <ai.eval.runsDir></ai.eval.runsDir>
+                <ai.eval.rewriteReport>true</ai.eval.rewriteReport>
             </properties>
             <build>
                 <plugins>
@@ -332,6 +335,9 @@
                             <systemPropertyVariables>
                                 <ai.eval.label>${ai.eval.label}</ai.eval.label>
                                 <ai.eval.runs>${ai.eval.runs}</ai.eval.runs>
+                                <ai.eval.cases>${ai.eval.cases}</ai.eval.cases>
+                                <ai.eval.runsDir>${ai.eval.runsDir}</ai.eval.runsDir>
+                                <ai.eval.rewriteReport>${ai.eval.rewriteReport}</ai.eval.rewriteReport>
                             </systemPropertyVariables>
                         </configuration>
                     </plugin>

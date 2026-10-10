@@ -1,0 +1,20 @@
+{
+  "id": "grpc-unavailable",
+  "description": "A live quote request reaches the gRPC channel and the inventory stub answers UNAVAILABLE.",
+  "log": "2026-10-09T13:08:01.014Z  INFO 1 --- [main] com.acme.quote.QuoteApplication : Started QuoteApplication in 4.4 seconds\n2026-10-09T13:08:02.110Z  INFO 1 --- [main] com.acme.quote.client.InventoryChannel : gRPC channel target=inventory.acme.svc:9090 plaintext=false\n2026-10-09T13:11:22.014Z  INFO 1 --- [http-nio-8080-exec-5] com.acme.quote.web.QuoteController : POST /api/quotes sku=SKU-441 warehouse=wh-east\n2026-10-09T13:11:22.088Z  INFO 1 --- [http-nio-8080-exec-5] com.acme.quote.client.InventoryClient : CheckStock rpc started deadline=1500ms\n2026-10-09T13:11:22.301Z ERROR 1 --- [http-nio-8080-exec-5] o.a.c.c.C.[.[.[/].[dispatcherServlet] : Servlet.service() for servlet [dispatcherServlet] threw exception\nio.grpc.StatusRuntimeException: UNAVAILABLE: io exception\n    at io.grpc.stub.ClientCalls.toStatusRuntimeException(ClientCalls.java:271)\n    at io.grpc.stub.ClientCalls.getUnchecked(ClientCalls.java:252)\n    at io.grpc.stub.ClientCalls.blockingUnaryCall(ClientCalls.java:165)\n    at com.acme.inventory.v1.InventoryGrpc$InventoryBlockingStub.checkStock(InventoryGrpc.java:214)\n    at com.acme.quote.client.InventoryClient.check(InventoryClient.java:48)\n    at com.acme.quote.web.QuoteController.quote(QuoteController.java:36)\n    at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)\n    at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:77)\n    at org.springframework.web.method.support.InvocableHandlerMethod.doInvoke(InvocableHandlerMethod.java:207)\n    at org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerAdapter.invokeHandlerMethod(RequestMappingHandlerAdapter.java:884)\n    at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:1081)\n    at org.springframework.web.servlet.FrameworkServlet.processRequest(FrameworkServlet.java:1011)\n    at jakarta.servlet.http.HttpServlet.service(HttpServlet.java:658)\n    at org.apache.catalina.core.ApplicationFilterChain.internalDoFilter(ApplicationFilterChain.java:205)\n    at org.apache.catalina.core.StandardWrapperValve.invoke(StandardWrapperValve.java:167)\n    at org.apache.tomcat.util.net.NioEndpoint$SocketProcessor.doRun(NioEndpoint.java:1744)\n    at java.base/java.lang.Thread.run(Thread.java:840)\nCaused by: io.netty.channel.AbstractChannel$AnnotatedConnectException: Connection refused: inventory.acme.svc/10.4.8.19:9090\nCaused by: java.net.ConnectException: Connection refused\n    at java.base/sun.nio.ch.Net.pollConnect(Native Method)\n    at java.base/sun.nio.ch.Net.pollConnectNow(Net.java:672)\n    at io.grpc.netty.shaded.io.netty.channel.nio.NioSocketChannel.doFinishConnect(NioSocketChannel.java:337)\n2026-10-09T13:11:22.318Z ERROR 1 --- [http-nio-8080-exec-5] com.acme.quote.web.QuoteController : quote failed sku=SKU-441 status=UNAVAILABLE\n2026-10-09T13:11:22.329Z  INFO 1 --- [http-nio-8080-exec-5] o.s.w.s.DispatcherServlet : Completed 500 INTERNAL_SERVER_ERROR",
+  "expected": {
+    "errorType": "NETWORK_ERROR",
+    "severity": "HIGH",
+    "acceptable": [
+      "NETWORK_ERROR",
+      "DEPENDENCY_FAILURE"
+    ],
+    "labelNote": "The deepest cause is java.net.ConnectException: Connection refused, which the taxonomy puts in NETWORK_ERROR and explicitly keeps out of TIMEOUT. The wrapping status is gRPC UNAVAILABLE from a dependency that never accepted the RPC, so DEPENDENCY_FAILURE is acceptable if the status code is treated as a failed downstream call. Primary is NETWORK_ERROR because connection refused is named.",
+    "rootCauseKeywords": [
+      "UNAVAILABLE",
+      "Connection refused",
+      "拒绝",
+      "9090"
+    ]
+  }
+}
