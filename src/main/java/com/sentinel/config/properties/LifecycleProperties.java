@@ -1,5 +1,6 @@
 package com.sentinel.config.properties;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -47,4 +48,35 @@ public class LifecycleProperties {
      */
     @NotNull
     private Duration reaperInterval = Duration.ofSeconds(60);
+
+    /**
+     * 核对 READY、BUSY、RETAINED 环境的容器是否还在。
+     */
+    @Valid
+    @NotNull
+    private Reconcile reconcile = new Reconcile();
+
+    /**
+     * 容器消失后的核对。容器在外部被删掉时，环境行仍会占着供给名额。
+     */
+    @Data
+    public static class Reconcile {
+
+        /**
+         * 是否核对。测试环境关闭，避免访问 Docker。
+         */
+        private boolean enabled = true;
+
+        /**
+         * 核对间隔。首次执行延后一个间隔，避免应用刚启动就碰 Docker。
+         */
+        @NotNull
+        private Duration interval = Duration.ofSeconds(60);
+
+        /**
+         * 创建或更新时间落在该时长内的环境先跳过，避免供给刚写完就被当成容器丢失。
+         */
+        @NotNull
+        private Duration grace = Duration.ofMinutes(2);
+    }
 }

@@ -28,6 +28,13 @@ public interface ContainerLauncher {
     Snapshot inspect(String containerId);
 
     /**
+     * 容器记录是否还在 Docker 里。
+     * 没有容器 ID，或 Docker 返回 NotFound 时为 false。
+     * 其它 Docker 错误原样抛出，调用方本轮不要据此改环境。
+     */
+    boolean exists(String containerId);
+
+    /**
      * 容器最近的标准输出和标准错误，最多 maxLines 行。读不到时返回空字符串，不抛异常。
      */
     String recentLogs(String containerId, int maxLines);

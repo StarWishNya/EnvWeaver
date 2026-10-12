@@ -49,6 +49,7 @@ import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
@@ -328,6 +329,43 @@ class DockerContainerLauncherTest {
         assertThat(failure).isNotNull();
         assertThat(failure.getMessage()).isEqualTo("容器不存在");
         assertThat(failure.getMessage()).doesNotContain("10.0.0.8");
+    }
+
+    @Test
+    @DisplayName("exists：还在为 true，NotFound 为 false，空 ID 不访问 Docker")
+    void existsReturnsFalseWhenContainerIsMissing() {
+        InspectContainerCmd present = mock(InspectContainerCmd.class);
+        when(dockerClient.inspectContainerCmd("cid-1")).thenReturn(present);
+        when(present.exec()).thenReturn(mock(InspectContainerResponse.class));
+        assertThat(launcher.exists("cid-1")).isTrue();
+
+        InspectContainerCmd missing = mock(InspectContainerCmd.class);
+        when(dockerClient.inspectContainerCmd("cid-missing")).thenReturn(missing);
+        when(missing.exec()).thenThrow(new NotFoundException("gone"));
+        assertThat(launcher.exists("cid-missing")).isFalse();
+
+        InspectContainerCmd wrapped = mock(InspectContainerCmd.class);
+        when(dockerClient.inspectContainerCmd("cid-wrapped")).thenReturn(wrapped);
+        when(wrapped.exec()).thenThrow(new RuntimeException("wrapped", new NotFoundException("gone")));
+        assertThat(launcher.exists("cid-wrapped")).isFalse();
+
+        assertThat(launcher.exists(null)).isFalse();
+        assertThat(launcher.exists("  ")).isFalse();
+        verify(dockerClient, never()).inspectContainerCmd(isNull());
+        verify(dockerClient, never()).inspectContainerCmd("  ");
+    }
+
+    @Test
+    @DisplayName("exists：其它 Docker 错误继续抛出，不当成容器已消失")
+    void existsPropagatesOtherDockerErrors() {
+        InspectContainerCmd inspect = mock(InspectContainerCmd.class);
+        when(dockerClient.inspectContainerCmd("cid-down")).thenReturn(inspect);
+        when(inspect.exec()).thenThrow(new DockerException("Get http://10.9.8.7:2375/v1.41 boom", 500));
+
+        DockerException thrown = catchThrowableOfType(() -> launcher.exists("cid-down"), DockerException.class);
+
+        assertThat(thrown).isNotNull().isNotInstanceOf(NotFoundException.class);
+        assertThat(thrown.getHttpStatus()).isEqualTo(500);
     }
 
     @Test

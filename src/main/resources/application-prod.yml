@@ -158,6 +158,10 @@ sentinel:
     failed-retention: 30m
     pending-sweep-interval: 30s
     reaper-interval: 60s
+    reconcile:
+      enabled: true
+      interval: 60s
+      grace: 2m
   provisioning:
     ttl: ${SENTINEL_PROVISION_TTL:2h}
     port-range: ${SENTINEL_PROVISION_PORT_RANGE:30000-39999}
