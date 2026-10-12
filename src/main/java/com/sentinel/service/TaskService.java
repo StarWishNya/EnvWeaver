@@ -419,7 +419,8 @@ public class TaskService {
 
     /**
      * 任务日志。tail 必须在 1..5000；since 非法时 400。
-     * 传了 since 时交给 Docker 的 since 过滤；行首仍带 Docker 时间戳的，再用窗口兜底并去掉前缀。
+     * 传了 since 时交给 Docker 的 since 过滤（只精确到秒）；行首仍带 Docker 时间戳的，再用窗口兜底并去掉前缀。
+     * 时间戳可靠时 {@code nextSince} 是已返回最后一行加 1 纳秒，下一次原样传回就不会重复，也不会漏掉同一秒里更晚的行。
      */
     public TaskLogsResponse getTaskLogs(Long taskId, int tail, String since) {
         ContainerLogWindow.checkTail(tail);
@@ -471,6 +472,8 @@ public class TaskService {
         StringBuilder body = new StringBuilder();
         boolean hasMore = false;
         boolean sawContainer = false;
+        boolean cursorBroken = false;
+        OffsetDateTime newest = null;
         for (Container container : containers) {
             if (container == null || !StringUtils.hasText(container.getContainerId())) {
                 continue;
@@ -482,6 +485,7 @@ public class TaskService {
             } catch (Exception ex) {
                 log.warn("读取容器日志失败，已跳过: containerId={}, reason={}",
                         container.getContainerId(), ex.getMessage());
+                cursorBroken = true;
                 continue;
             }
             if (ContainerLogWindow.countLines(raw) >= tail) {
@@ -489,7 +493,13 @@ public class TaskService {
             }
             String filtered = ContainerLogWindow.filterSince(raw, sinceTime);
             if (sinceTime != null && ContainerLogWindow.uniformDockerTimestampPrefixes(raw)) {
+                OffsetDateTime stamp = ContainerLogWindow.latestTimestamp(filtered);
+                if (stamp != null && (newest == null || stamp.isAfter(newest))) {
+                    newest = stamp;
+                }
                 filtered = ContainerLogWindow.stripDockerTimestampPrefixes(filtered);
+            } else if (StringUtils.hasText(filtered)) {
+                cursorBroken = true;
             }
             if (!StringUtils.hasText(filtered)) {
                 continue;
@@ -510,6 +520,11 @@ public class TaskService {
         }
         response.setLogs(body.toString());
         response.setHasMore(hasMore);
+        if (sinceTime != null && !cursorBroken) {
+            response.setNextSince(newest != null
+                    ? ContainerLogWindow.cursorAfter(newest)
+                    : ContainerLogWindow.formatSince(sinceTime));
+        }
         return response;
     }
 

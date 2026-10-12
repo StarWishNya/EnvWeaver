@@ -485,6 +485,15 @@ components:
         hasMore:
           type: boolean
           description: 任一容器返回的行数达到 tail 时为 true。
+        nextSince:
+          type: string
+          nullable: true
+          format: date-time
+          description: |
+            下一轮增量拉取应原样传回 since。值为本次已返回日志里最晚一条时间戳加 1 纳秒；
+            没有新行时等于本次请求的 since（同一时刻，不是再加 1 纳秒）。
+            Docker 的 since 只精确到秒，同一秒内更早的行会重新读到，再由服务端按完整时间戳丢掉，因此不重复，也不漏掉同一秒内更晚的行。
+            未传 since、日志没有统一的 Docker 时间戳、读取容器失败，或没有容器日志可对齐时为 null。旧客户端可以忽略该字段。
 
     EnvironmentStatus:
       type: string
@@ -1243,7 +1252,10 @@ paths:
     get:
       tags: [Task]
       summary: 获取任务日志
-      description: 返回环境容器日志。tail 合法范围 1–5000。since 支持带偏移的 ISO-8601，以及无时区的本地日期时间。
+      description: |
+        返回环境容器日志。tail 合法范围 1–5000。since 支持带偏移的 ISO-8601，以及无时区的本地日期时间。
+        Docker 的 since 只精确到秒。响应里的 nextSince 用纳秒游标补上这个缺口：下一轮把该值原样传回 since，
+        只得到严格晚于本次已返回时间戳的新行。无法可靠续传时 nextSince 为 null。
       operationId: getTaskLogs
       parameters:
         - $ref: '#/components/parameters/NumericTaskId'
@@ -1258,7 +1270,9 @@ paths:
         - name: since
           in: query
           required: false
-          description: 从该时间开始。空白视为未传。非法格式 HTTP 400，code 5004。
+          description: |
+            从该时间开始。空白视为未传。非法格式 HTTP 400，code 5004。
+            增量拉取时传上一次响应的 nextSince。服务端先按 Docker 的整秒 since 取日志，再用完整时间戳丢掉已返回的行。
           schema:
             type: string
             format: date-time

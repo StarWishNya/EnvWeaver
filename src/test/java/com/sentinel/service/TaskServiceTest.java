@@ -542,6 +542,7 @@ public class TaskServiceTest {
 
         assertThat(response.getLogs()).isEqualTo("boom");
         assertThat(response.isHasMore()).isFalse();
+        assertThat(response.getNextSince()).isNull();
         verifyNoInteractions(dockerService);
     }
 
@@ -607,6 +608,7 @@ public class TaskServiceTest {
         assertThat(response.getLogs()).isEqualTo(
                 "--- container mysql ---\na\nb\n--- container redis ---\nonly-one");
         assertThat(response.isHasMore()).isTrue();
+        assertThat(response.getNextSince()).isNull();
         assertThat(response.getLogs()).doesNotContain("should-not-appear");
     }
 
@@ -667,6 +669,7 @@ public class TaskServiceTest {
         assertThat(response.getLogs()).isEqualTo(
                 "--- container mysql ---\nplain\n2026-10-09T09:00:00.000000000Z new");
         assertThat(response.isHasMore()).isTrue();
+        assertThat(response.getNextSince()).isNull();
         verify(dockerService).getContainerLogs("c1", 3, since);
         verify(dockerService, never()).getContainerLogs(anyString(), anyInt());
     }
@@ -691,6 +694,81 @@ public class TaskServiceTest {
         assertThat(response.getLogs()).isEqualTo(
                 "--- container mysql ---\nplain\n2026-10-09T09:00:01Z new");
         assertThat(response.isHasMore()).isTrue();
+        assertThat(response.getNextSince()).isEqualTo("2026-10-09T09:00:00.000000001Z");
+    }
+
+    @Test
+    @DisplayName("同一秒里 Docker 会重给已返回的行，nextSince 把它们丢掉并留下更晚的行")
+    public void shouldAdvanceCursorPastReturnedLinesInTheSameSecond() {
+        Task task = TaskBuilder.aTask().withId(8L).withEnvironmentId(3L).build();
+        when(taskMapper.selectById(8L)).thenReturn(task);
+        Container mysql = new Container();
+        mysql.setContainerId("c1");
+        mysql.setContainerName("mysql");
+        when(dockerService.getContainersByEnvironmentId(3L)).thenReturn(List.of(mysql));
+
+        Instant origin = Instant.parse("1970-01-01T00:00:00Z");
+        when(dockerService.getContainerLogs("c1", 100, origin)).thenReturn(
+                "2026-10-09T08:00:00.100000000Z one\n2026-10-09T08:00:00.500000000Z two\n");
+
+        TaskLogsResponse first = taskService.getTaskLogs(8L, 100, "1970-01-01T00:00:00Z");
+
+        assertThat(first.getLogs()).isEqualTo("--- container mysql ---\none\ntwo");
+        assertThat(first.getNextSince()).isEqualTo("2026-10-09T08:00:00.500000001Z");
+
+        Instant cursor = Instant.parse(first.getNextSince());
+        when(dockerService.getContainerLogs("c1", 5000, cursor)).thenReturn(
+                "2026-10-09T08:00:00.100000000Z one\n"
+                        + "2026-10-09T08:00:00.500000000Z two\n"
+                        + "2026-10-09T08:00:00.800000000Z three\n");
+
+        TaskLogsResponse second = taskService.getTaskLogs(8L, 5000, first.getNextSince());
+
+        assertThat(second.getLogs()).isEqualTo("--- container mysql ---\nthree");
+        assertThat(second.getNextSince()).isEqualTo("2026-10-09T08:00:00.800000001Z");
+        verify(dockerService).getContainerLogs("c1", 5000, cursor);
+    }
+
+    @Test
+    @DisplayName("没有新行时 nextSince 保持不变")
+    public void shouldKeepCursorWhenNoNewLines() {
+        Task task = TaskBuilder.aTask().withId(8L).withEnvironmentId(3L).build();
+        when(taskMapper.selectById(8L)).thenReturn(task);
+        Container mysql = new Container();
+        mysql.setContainerId("c1");
+        mysql.setContainerName("mysql");
+        when(dockerService.getContainersByEnvironmentId(3L)).thenReturn(List.of(mysql));
+        String cursor = "2026-10-09T08:00:00.500000001Z";
+        when(dockerService.getContainerLogs("c1", 5000, Instant.parse(cursor))).thenReturn(
+                "2026-10-09T08:00:00.100000000Z one\n2026-10-09T08:00:00.500000000Z two\n");
+
+        TaskLogsResponse response = taskService.getTaskLogs(8L, 5000, cursor);
+
+        assertThat(response.getLogs()).isEmpty();
+        assertThat(response.getNextSince()).isEqualTo(cursor);
+    }
+
+    @Test
+    @DisplayName("容器日志读取失败时不给出续传游标")
+    public void shouldOmitCursorWhenContainerReadFails() {
+        Task task = TaskBuilder.aTask().withId(8L).withEnvironmentId(3L).build();
+        when(taskMapper.selectById(8L)).thenReturn(task);
+        Container bad = new Container();
+        bad.setContainerId("c1");
+        bad.setContainerName("mysql");
+        Container ok = new Container();
+        ok.setContainerId("c2");
+        ok.setContainerName("redis");
+        when(dockerService.getContainersByEnvironmentId(3L)).thenReturn(List.of(bad, ok));
+        Instant since = Instant.parse("2026-10-09T08:00:00Z");
+        when(dockerService.getContainerLogs("c1", 10, since)).thenThrow(new RuntimeException("down"));
+        when(dockerService.getContainerLogs("c2", 10, since)).thenReturn(
+                "2026-10-09T08:00:01.000000000Z up\n");
+
+        TaskLogsResponse response = taskService.getTaskLogs(8L, 10, "2026-10-09T08:00:00Z");
+
+        assertThat(response.getLogs()).isEqualTo("--- container redis ---\nup");
+        assertThat(response.getNextSince()).isNull();
     }
 
     @Test

@@ -130,6 +130,50 @@ public final class ContainerLogWindow {
     }
 
     /**
+     * 已保留行里最晚的行首时间。没有能解析的时间戳时返回 null。
+     */
+    public static OffsetDateTime latestTimestamp(String logs) {
+        if (logs == null || logs.isEmpty()) {
+            return null;
+        }
+        String[] lines = logs.split("\n", -1);
+        boolean trailingNewline = logs.endsWith("\n");
+        int limit = trailingNewline ? lines.length - 1 : lines.length;
+        OffsetDateTime latest = null;
+        for (int i = 0; i < limit; i++) {
+            OffsetDateTime timestamp = leadingTimestamp(lines[i]);
+            if (timestamp == null) {
+                continue;
+            }
+            if (latest == null || timestamp.isAfter(latest)) {
+                latest = timestamp;
+            }
+        }
+        return latest;
+    }
+
+    /**
+     * 下一次 since。比已返回的最后一条再晚 1 纳秒，这样等于上一条时间戳的行不会再出现，
+     * 同一秒内更晚的行仍会留下。Docker 的 since 只精确到秒，秒内的取舍靠 {@link #filterSince}。
+     */
+    public static String cursorAfter(OffsetDateTime timestamp) {
+        if (timestamp == null) {
+            return null;
+        }
+        return formatSince(timestamp.plusNanos(1));
+    }
+
+    /**
+     * 写成带偏移的 ISO-8601，供下一轮 since 原样传回。
+     */
+    public static String formatSince(OffsetDateTime timestamp) {
+        if (timestamp == null) {
+            return null;
+        }
+        return DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(timestamp);
+    }
+
+    /**
      * 去掉每行开头的一层 Docker 时间戳（带时区的 RFC3339，后面紧跟一个空格）。
      * 没有空格、或行首时间不带时区时视为日志正文，整行保留。只剥一层。
      */

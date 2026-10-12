@@ -131,4 +131,40 @@ class ContainerLogWindowTest {
         assertThat(ContainerLogWindow.uniformDockerTimestampPrefixes(null)).isFalse();
         assertThat(ContainerLogWindow.uniformDockerTimestampPrefixes("")).isFalse();
     }
+
+    @Test
+    @DisplayName("游标比最后一条晚 1 纳秒，同一秒内更早的行丢掉、更晚的行留下")
+    void cursorSkipsReturnedLineAndKeepsLaterLineInSameSecond() {
+        OffsetDateTime last = OffsetDateTime.parse("2026-10-09T08:00:00.500000000Z");
+        String cursor = ContainerLogWindow.cursorAfter(last);
+
+        assertThat(cursor).isEqualTo("2026-10-09T08:00:00.500000001Z");
+        assertThat(ContainerLogWindow.formatSince(ContainerLogWindow.parseSince(cursor))).isEqualTo(cursor);
+        assertThat(ContainerLogWindow.cursorAfter(null)).isNull();
+        assertThat(ContainerLogWindow.formatSince(null)).isNull();
+        assertThat(ContainerLogWindow.latestTimestamp(null)).isNull();
+        assertThat(ContainerLogWindow.latestTimestamp("")).isNull();
+        assertThat(ContainerLogWindow.latestTimestamp(
+                "2026-10-09T08:00:00.200000000Z later\n2026-10-09T08:00:00.100000000Z earlier\n"))
+                .isEqualTo(OffsetDateTime.parse("2026-10-09T08:00:00.200000000Z"));
+
+        OffsetDateTime parsed = ContainerLogWindow.parseSince(cursor);
+        String logs = """
+                2026-10-09T08:00:00.100000000Z first
+                2026-10-09T08:00:00.500000000Z second
+                2026-10-09T08:00:00.500000001Z boundary
+                2026-10-09T08:00:00.500000002Z third
+                """;
+
+        assertThat(ContainerLogWindow.filterSince(logs, parsed)).isEqualTo("""
+                2026-10-09T08:00:00.500000001Z boundary
+                2026-10-09T08:00:00.500000002Z third
+                """);
+
+        String overflow = ContainerLogWindow.cursorAfter(OffsetDateTime.parse("2026-10-09T08:00:00.999999999Z"));
+        assertThat(overflow).isEqualTo("2026-10-09T08:00:01Z");
+        assertThat(ContainerLogWindow.filterSince(
+                "2026-10-09T08:00:00.999999999Z last\n2026-10-09T08:00:01Z next\n",
+                ContainerLogWindow.parseSince(overflow))).isEqualTo("2026-10-09T08:00:01Z next\n");
+    }
 }
