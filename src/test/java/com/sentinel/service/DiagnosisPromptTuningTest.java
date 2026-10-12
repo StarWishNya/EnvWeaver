@@ -114,6 +114,13 @@ class DiagnosisPromptTuningTest {
                 "TIMEOUT", "CONFIG_ERROR", "UNKNOWN",
                 "LOW", "MEDIUM", "HIGH", "CRITICAL");
         assertThat(prompt).contains("Address already in use", "AssertionFailedError", "No space left on device");
+        assertThat(prompt).contains(
+                "PKIX path building failed", "certificate expired", "hostname mismatch",
+                "java.nio.file.AccessDeniedException", "UnrecognizedPropertyException",
+                "MismatchedInputException", "JsonParseException", "Too many open files",
+                "RejectedExecutionException");
+        assertThat(prompt).contains("即使同一段日志还有 HTTP 503");
+        assertThat(prompt).contains("只有内存和磁盘是 CRITICAL");
         assertThat(prompt).doesNotContain("InvoiceCalculator", "sentinel.jwt", "oom-heap", "HikariPool", "KafkaProducer");
     }
 

@@ -10,11 +10,6 @@
       "就绪",
       "503",
       "deadline exceeded"
-    ],
-    "acceptable": [
-      "TIMEOUT",
-      "DEPENDENCY_FAILURE"
-    ],
-    "labelNote": "The recorded failure is the readiness probe hitting its deadline (context deadline exceeded / Client.Timeout exceeded while awaiting headers) after repeated HTTP 503 answers. TIMEOUT is primary because the failure that removes the pod is the exceeded probe deadline. DEPENDENCY_FAILURE is acceptable because the application itself is returning 503 for an unready payment component, which is the same family as a connected service answering a failure status."
+    ]
   }
 }
