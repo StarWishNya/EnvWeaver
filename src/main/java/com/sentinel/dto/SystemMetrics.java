@@ -23,6 +23,35 @@ public class SystemMetrics {
     private Containers containers;
 
     /**
+     * 占用中的环境数。CREATING、READY、BUSY、RETAINED、RELEASING。
+     */
+    private int activeEnvironments;
+
+    /**
+     * 占用中环境里的容器数。
+     */
+    private int activeContainers;
+
+    /**
+     * 正在排队、尚未供给的任务数。
+     */
+    private int queuedTasks;
+
+    /**
+     * 配置的上限。0 或负数表示不限制。
+     */
+    private Limits limits;
+
+    /**
+     * sentinel.provisioning.limits。
+     */
+    @Data
+    public static class Limits {
+        private int maxActiveEnvironments;
+        private int maxContainers;
+    }
+
+    /**
      * CPU 使用率 0-100；采集不到时 usage 为 -1。cores 采集不到时为 0。
      */
     @Data

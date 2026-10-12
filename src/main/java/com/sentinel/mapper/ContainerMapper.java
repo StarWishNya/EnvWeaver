@@ -35,6 +35,20 @@ public interface ContainerMapper extends BaseMapper<Container> {
     Container findByContainerId(@Param("containerId") String containerId);
 
     /**
+     * 占用中环境里的容器行数。
+     */
+    @Select("SELECT COUNT(*) FROM t_container c INNER JOIN t_environment e ON e.id = c.environment_id " +
+            "WHERE e.status IN ('CREATING','READY','BUSY','RETAINED','RELEASING')")
+    Integer countInOccupyingEnvironments();
+
+    /**
+     * 某个任务的占用环境里已经写入的容器行数。
+     */
+    @Select("SELECT COUNT(*) FROM t_container c INNER JOIN t_environment e ON e.id = c.environment_id " +
+            "WHERE e.task_id = #{taskId} AND e.status IN ('CREATING','READY','BUSY','RETAINED','RELEASING')")
+    Integer countInOccupyingEnvironmentsByTaskId(@Param("taskId") Long taskId);
+
+    /**
      * 某个环境里仍在运行的容器。采集资源时只统计这些容器。
      */
     @Select("SELECT * FROM t_container WHERE environment_id = #{environmentId} AND status = 'RUNNING'")

@@ -5,8 +5,10 @@ import com.sentinel.domain.Container;
 import com.sentinel.domain.Environment;
 import com.sentinel.dto.EnvironmentDTO;
 import com.sentinel.enums.ErrorCode;
+import com.sentinel.event.EnvironmentReleasedEvent;
 import com.sentinel.mapper.ContainerMapper;
 import com.sentinel.mapper.EnvironmentMapper;
+import org.springframework.context.ApplicationEventPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -24,6 +26,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -348,6 +351,20 @@ public class EnvironmentServiceTest {
         verify(dockerService, never()).assertDockerAvailable();
         verify(dockerService, never()).stopAndRemoveContainer(any());
         assertThat(statusUpdates).containsExactly("RELEASING", "IDLE");
+    }
+
+    @Test
+    @DisplayName("释放到 IDLE 后发布环境已释放事件")
+    public void shouldPublishWhenEnvironmentBecomesIdle() {
+        ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+        EnvironmentService publishing = new EnvironmentService(
+                environmentMapper, containerMapper, dockerService, publisher);
+        when(environmentMapper.selectById(1L)).thenReturn(environment("READY"));
+        when(containerMapper.findByEnvironmentId(1L)).thenReturn(List.of());
+
+        publishing.releaseEnvironment(1L);
+
+        verify(publisher).publishEvent(new EnvironmentReleasedEvent(1L));
     }
 
     private Environment environment(String status) {

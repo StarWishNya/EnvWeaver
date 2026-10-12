@@ -801,4 +801,84 @@ public class TaskServiceTest {
 
         verify(taskMapper, never()).selectTaskPage(any(), any(), any());
     }
+
+    @Test
+    @DisplayName("排队中的任务可以取消，且没有环境")
+    public void shouldCancelQueuedTaskWithoutEnvironment() {
+        Task queued = TaskBuilder.aTask().withId(1L).withStatus("QUEUED").withEnvironmentId(null).build();
+        queued.setQueuedAt(LocalDateTime.of(2026, 10, 10, 1, 0));
+        when(taskMapper.selectById(1L)).thenReturn(queued);
+        when(taskMapper.updateById(any(Task.class))).thenReturn(1);
+
+        taskService.cancelTask(1L);
+
+        verify(taskMapper).updateById(argThat((Task task) ->
+                "CANCELLED".equals(task.getStatus())
+                        && task.getCompletedAt() != null
+                        && task.getEnvironmentId() == null));
+        verify(eventPublisher).publishEvent(new TaskStatusChangedEvent(1L, "QUEUED", "CANCELLED"));
+        verifyNoInteractions(dockerService);
+    }
+
+    @Test
+    @DisplayName("排队中的任务除取消外回报状态返回 400")
+    public void shouldRejectStatusReportForQueuedTaskUnlessCancel() {
+        Task queued = TaskBuilder.aTask().withId(1L).withStatus("QUEUED").build();
+        when(taskMapper.selectById(1L)).thenReturn(queued);
+
+        assertThatThrownBy(() -> taskService.updateTaskStatus(1L, "SUCCESS"))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", ErrorCode.OPERATION_NOT_ALLOWED.getCode())
+                .hasMessage("排队中的任务只能取消");
+        assertThatThrownBy(() -> taskService.updateTaskStatus(1L, "FAILED"))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", ErrorCode.OPERATION_NOT_ALLOWED.getCode());
+        assertThatThrownBy(() -> taskService.updateTaskStatus(1L, "RUNNING"))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", ErrorCode.OPERATION_NOT_ALLOWED.getCode());
+        verify(taskMapper, never()).updateById(any(Task.class));
+
+        when(taskMapper.updateById(any(Task.class))).thenReturn(1);
+        taskService.updateTaskStatus(1L, "CANCELLED");
+        verify(taskMapper).updateById(argThat((Task task) -> "CANCELLED".equals(task.getStatus())));
+    }
+
+    @Test
+    @DisplayName("排队位次按优先级和排队时间计算")
+    public void shouldNumberQueueByPriorityThenQueuedAt() {
+        Task earlyLow = TaskBuilder.aTask().withId(2L).withStatus("QUEUED").withPriority(1).build();
+        earlyLow.setQueuedAt(LocalDateTime.of(2026, 10, 10, 1, 0));
+        Task lateHigh = TaskBuilder.aTask().withId(8L).withStatus("QUEUED").withPriority(9).build();
+        lateHigh.setQueuedAt(LocalDateTime.of(2026, 10, 10, 3, 0));
+        Task earlierHigh = TaskBuilder.aTask().withId(4L).withStatus("QUEUED").withPriority(9).build();
+        earlierHigh.setQueuedAt(LocalDateTime.of(2026, 10, 10, 2, 0));
+        when(taskMapper.findWaitingQueued()).thenReturn(List.of(earlyLow, lateHigh, earlierHigh));
+
+        assertThat(taskService.queuePositions())
+                .containsExactly(
+                        Map.entry(4L, 1),
+                        Map.entry(8L, 2),
+                        Map.entry(2L, 3));
+    }
+
+    @Test
+    @DisplayName("进入排队和出队都是条件更新")
+    public void shouldMarkAndClaimQueuedWithEvents() {
+        LocalDateTime queuedAt = LocalDateTime.of(2026, 10, 10, 4, 0);
+        when(taskMapper.markQueued(1L, queuedAt)).thenReturn(1);
+        assertThat(taskService.markQueued(1L, queuedAt)).isTrue();
+        verify(eventPublisher).publishEvent(new TaskStatusChangedEvent(1L, "PENDING", "QUEUED"));
+
+        when(taskMapper.markQueued(1L, queuedAt)).thenReturn(0);
+        assertThat(taskService.markQueued(1L, queuedAt)).isFalse();
+        verify(eventPublisher, times(1)).publishEvent(new TaskStatusChangedEvent(1L, "PENDING", "QUEUED"));
+
+        when(taskMapper.claimQueued(1L)).thenReturn(1);
+        assertThat(taskService.claimQueued(1L)).isTrue();
+        verify(eventPublisher).publishEvent(new TaskStatusChangedEvent(1L, "QUEUED", "PENDING"));
+
+        when(taskMapper.claimQueued(1L)).thenReturn(0);
+        assertThat(taskService.claimQueued(1L)).isFalse();
+        verify(eventPublisher, times(1)).publishEvent(new TaskStatusChangedEvent(1L, "QUEUED", "PENDING"));
+    }
 }

@@ -87,6 +87,19 @@ public interface EnvironmentMapper extends BaseMapper<Environment> {
     List<Environment> selectIdleWithResourceUsage(@Param("limit") int limit);
 
     /**
+     * 占用中的环境数。CREATING、READY、BUSY、RETAINED、RELEASING。
+     */
+    @Select("SELECT COUNT(*) FROM t_environment WHERE status IN ('CREATING','READY','BUSY','RETAINED','RELEASING')")
+    Integer countOccupying();
+
+    /**
+     * 某个任务名下占用中的环境数。
+     */
+    @Select("SELECT COUNT(*) FROM t_environment WHERE task_id = #{taskId} " +
+            "AND status IN ('CREATING','READY','BUSY','RETAINED','RELEASING')")
+    Integer countOccupyingByTaskId(@Param("taskId") Long taskId);
+
+    /**
      * 只更新 resource_usage，不改 status。
      * resourceUsage 为 null 时写成 SQL NULL。updated_at 可以随行更新而变化。
      */

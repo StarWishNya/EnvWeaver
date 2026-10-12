@@ -51,6 +51,23 @@ class ProvisioningPropertiesBindingTest {
         assertThat(properties.getDependencies().get("mysql").getImage()).isEqualTo("mysql:8.0.36");
         assertThat(properties.getDependencies().get("mysql").getEnv()).containsEntry("MYSQL_DATABASE", "test");
         assertThat(properties.toString()).doesNotContain("sentinel-secret-value");
+        assertThat(properties.getLimits().getMaxActiveEnvironments()).isEqualTo(10);
+        assertThat(properties.getLimits().getMaxContainers()).isEqualTo(30);
+    }
+
+    @Test
+    @DisplayName("上限可以绑成 0 或负数，表示不限制")
+    void bindsUnlimitedLimits() {
+        Map<String, String> values = new LinkedHashMap<>();
+        values.put("sentinel.provisioning.limits.max-active-environments", "0");
+        values.put("sentinel.provisioning.limits.max-containers", "-1");
+
+        ProvisioningProperties properties = new ProvisioningProperties();
+        new Binder(new MapConfigurationPropertySource(values))
+                .bind("sentinel.provisioning", Bindable.ofInstance(properties));
+
+        assertThat(properties.getLimits().getMaxActiveEnvironments()).isZero();
+        assertThat(properties.getLimits().getMaxContainers()).isEqualTo(-1);
     }
 
     @Test
@@ -71,6 +88,8 @@ class ProvisioningPropertiesBindingTest {
         assertThat(source.getProperty("sentinel.lifecycle.auto-diagnose")).isEqualTo(autoProvision);
         assertThat(source.getProperty("sentinel.provisioning.ttl")).isNotNull();
         assertThat(String.valueOf(source.getProperty("sentinel.provisioning.port-range"))).contains("30000");
+        assertThat(source.getProperty("sentinel.provisioning.limits.max-active-environments")).isNotNull();
+        assertThat(source.getProperty("sentinel.provisioning.limits.max-containers")).isNotNull();
         assertThat(source.getProperty("sentinel.provisioning.dependencies.mysql.image")).isNull();
         assertThat(source.getProperty("sentinel.provisioning.dependencies.nginx.image")).isNull();
         assertThat(source.getProperty("sentinel.provisioning.dependencies.rabbitmq.image")).isNull();

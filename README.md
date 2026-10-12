@@ -311,6 +311,16 @@ BASE_URL=http://localhost:8080 bash scripts/ai-smoke-test.sh
 
 `sentinel.lifecycle.auto-provision` 和 `auto-diagnose` 可分别关闭自动供给和失败自动诊断。测试 profile 中两者都关闭。
 
+## 资源上限与排队
+
+`sentinel.provisioning.limits.max-active-environments` 默认 10，统计状态为 `CREATING`、`READY`、`BUSY`、`RETAINED`、`RELEASING` 的环境。`max-containers` 默认 30，统计这些环境里的容器，再加上新任务依赖要启动的容器。两项都可以设为 0 或负数，表示不限制。
+
+创建任务或补扫 `PENDING` 时，如果再启动会超过任一上限，任务变成 `QUEUED` 并写入 `queued_at`，不创建环境。容量在环境释放、回收或任务结束时释放，后台也会按 `pending-sweep-interval` 补扫。出队顺序是 `priority` 从高到低，相同优先级按 `queued_at` 从早到晚。放得下的会启动，放不下的留在队列里。
+
+正在排队的任务可以取消（`CANCELLED`，没有环境）。用 `PUT /api/tasks/{id}/status` 把它改成取消以外的状态会返回 HTTP 400。任务响应里的 `queuePosition` 从 1 开始，只对正在排队的任务有值。`GET /api/metrics` 增加 `activeEnvironments`、`activeContainers`、`queuedTasks` 和 `limits`。
+
+同一进程用锁和条件更新（`QUEUED` 且 `queued_at` 非空才改回 `PENDING`）保证一个任务不会分到两个环境。多实例同时写这套库时，这把锁看不见对方，需要分布式锁；Redis 已通过 `CacheService` 接入，可以在那一层加锁。
+
 `READY`、`BUSY`、`RETAINED` 的环境每 `sentinel.monitoring.resource-usage.interval`（默认 30 秒）通过 `docker stats` 采集一次，各容器汇总后写入 `resourceUsage`。环境变为 `IDLE` 后清空。设置 `sentinel.monitoring.resource-usage.enabled=false` 可关闭采集。
 
 ## 中间件目录与环境模板

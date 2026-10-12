@@ -711,8 +711,25 @@ function paintTaskRows(body, rows, gen, reload) {
   body.replaceChildren.apply(body, rows.map(function (task) { return taskRow(task, gen, reload); }));
 }
 
+function queuePositionText(task) {
+  if (!task || task.status !== 'QUEUED' || task.queuePosition == null || task.queuePosition === '') return '';
+  var position = Number(task.queuePosition);
+  if (!isFinite(position) || position < 1) return '';
+  return '第 ' + Math.floor(position) + ' 位';
+}
+
+/* QUEUED 没有排队位置时是已出队、正在创建环境。 */
+function taskStatusBadge(task) {
+  if (task && task.status === 'QUEUED' && !queuePositionText(task)) {
+    return badge([['QUEUED', '供给中']], 'QUEUED');
+  }
+  return badge(TASK_STATUSES, task && task.status);
+}
+
 function taskRow(task, gen, reload) {
-  var statusCell = add(el('td'), badge(TASK_STATUSES, task.status));
+  var statusCell = add(el('td'), taskStatusBadge(task));
+  var queueText = queuePositionText(task);
+  if (queueText) statusCell.appendChild(text('div', queueText, { class: 'hint' }));
   return add(el('tr'),
     text('td', task.id == null ? '—' : String(task.id), { class: 'num' }),
     clipCell(task.taskCode), clipCell(task.serviceId),
@@ -811,7 +828,9 @@ function paintTaskDetail(host, task, gen, reload) {
   var pairs = [['ID', task.id == null ? '—' : String(task.id)]];
   if (task.serviceId != null && String(task.serviceId).trim() !== '') pairs.push(['服务', String(task.serviceId)]);
   if (task.testType) pairs.push(['测试类型', labelOf(TEST_TYPES, task.testType)]);
-  pairs.push(['状态', badge(TASK_STATUSES, task.status)]);
+  pairs.push(['状态', taskStatusBadge(task)]);
+  var queueText = queuePositionText(task);
+  if (queueText) pairs.push(['排队位置', queueText]);
   if (task.priority != null && task.priority !== '') pairs.push(['优先级', String(task.priority)]);
   if (deps.length) pairs.push(['依赖', deps.join('、')]);
   if (task.environmentId != null && task.environmentId !== '') {
@@ -1117,18 +1136,41 @@ function metricCard(title, value, detail, percent) {
   return card;
 }
 
+function limitLine(used, max) {
+  var amount = finiteNumber(used);
+  var shown = amount == null ? '—' : String(Math.round(amount));
+  var cap = finiteNumber(max);
+  if (cap == null) return shown;
+  if (cap <= 0) return shown + ' / 不限制';
+  return shown + ' / ' + String(Math.round(cap));
+}
+
+function limitPercent(used, max) {
+  var amount = finiteNumber(used);
+  var cap = finiteNumber(max);
+  if (amount == null || cap == null || cap <= 0) return null;
+  return Math.max(0, Math.min(100, amount * 100 / cap));
+}
+
 function paintMetrics(host, data) {
   var cpu = data.cpu || {};
   var memory = data.memory || {};
   var disk = data.disk || {};
   var containers = data.containers || {};
+  var limits = data.limits || {};
+  var queued = finiteNumber(data.queuedTasks);
   host.replaceChildren(
     metricCard('CPU', formatPercent(cpu.usage), (cpu.cores == null ? '—' : String(cpu.cores)) + ' 核', cpu.usage),
     metricCard('内存', formatPercent(memory.usage), formatBytes(memory.used) + ' / ' + formatBytes(memory.total), memory.usage),
     metricCard('磁盘', formatPercent(disk.usage), formatBytes(disk.used) + ' / ' + formatBytes(disk.total), disk.usage),
     metricCard('容器', String(containers.running == null ? '—' : containers.running),
-      '运行 ' + (containers.running || 0) + ' · 暂停 ' + (containers.paused || 0) + ' · 停止 ' + (containers.stopped || 0)));
-  host.appendChild(text('p', '采样 ' + formatTime(data.timestamp), { class: 'hint span-all' }));
+      '运行 ' + (containers.running || 0) + ' · 暂停 ' + (containers.paused || 0) + ' · 停止 ' + (containers.stopped || 0)),
+    metricCard('活跃环境', limitLine(data.activeEnvironments, limits.maxActiveEnvironments),
+      'CREATING、READY、BUSY、RETAINED、RELEASING', limitPercent(data.activeEnvironments, limits.maxActiveEnvironments)),
+    metricCard('活跃容器', limitLine(data.activeContainers, limits.maxContainers),
+      '占用环境中的容器', limitPercent(data.activeContainers, limits.maxContainers)),
+    metricCard('排队任务', queued == null ? '—' : String(Math.round(queued)), '等待供给'));
+  host.appendChild(text('p', '采样 ' + formatTime(data.timestamp) + '。上限为 0 表示不限制。', { class: 'hint span-all' }));
 }
 
 function healthBadge(label, value) {

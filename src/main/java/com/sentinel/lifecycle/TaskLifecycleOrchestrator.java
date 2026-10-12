@@ -7,12 +7,15 @@ import com.sentinel.config.properties.LifecycleProperties;
 import com.sentinel.config.properties.ProvisioningProperties;
 import com.sentinel.domain.Environment;
 import com.sentinel.domain.Task;
+import com.sentinel.event.EnvironmentReleasedEvent;
 import com.sentinel.event.TaskCreatedEvent;
 import com.sentinel.event.TaskStatusChangedEvent;
 import com.sentinel.mapper.EnvironmentMapper;
 import com.sentinel.service.DiagnosisService;
 import com.sentinel.service.EnvironmentProvisioner;
 import com.sentinel.service.EnvironmentService;
+import com.sentinel.service.ProvisioningCapacity;
+import com.sentinel.service.QueueOrder;
 import com.sentinel.service.TaskService;
 import com.sentinel.service.provision.ProvisioningFailedException;
 import lombok.extern.slf4j.Slf4j;
@@ -20,6 +23,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
+import org.springframework.context.event.EventListener;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.util.StringUtils;
@@ -27,13 +31,18 @@ import org.springframework.util.StringUtils;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 任务创建后供给环境，终态后释放或保留现场。
- * 监听器在事务提交后异步执行；PENDING 到 QUEUED 的比较并设置保证只供给一次。
+ * 监听器在事务提交后异步执行。容量够时 PENDING 到 QUEUED 的比较并设置保证只供给一次；
+ * 容量不够时同样写成 QUEUED，但带 queuedAt，表示在排队、还没有环境。
+ * 出队把这种 QUEUED 改回 PENDING（并清空 queuedAt）再供给。进程内锁串行判断上限。
+ * 多实例共享数据库时这把锁无效，需要分布式锁（可用 CacheService 的 Redis）。
  *
  * @author Sentinel Team
  */
@@ -62,8 +71,14 @@ public class TaskLifecycleOrchestrator {
     private final EnvironmentMapper environmentMapper;
     private final LifecycleProperties lifecycleProperties;
     private final ProvisioningProperties provisioningProperties;
+    private final ProvisioningCapacity provisioningCapacity;
     private final Executor lifecycleExecutor;
     private final Clock clock;
+    /**
+     * 单机准入锁。多实例各自一把，限制会被同时突破，需要分布式锁。
+     */
+    private final ReentrantLock admissionLock = new ReentrantLock();
+    private final ThreadLocal<Integer> drainDepth = ThreadLocal.withInitial(() -> 0);
 
     @Autowired
     public TaskLifecycleOrchestrator(TaskService taskService,
@@ -73,9 +88,11 @@ public class TaskLifecycleOrchestrator {
                                      EnvironmentMapper environmentMapper,
                                      LifecycleProperties lifecycleProperties,
                                      ProvisioningProperties provisioningProperties,
+                                     ProvisioningCapacity provisioningCapacity,
                                      @Qualifier(LifecycleAsyncConfig.LIFECYCLE_EXECUTOR) Executor lifecycleExecutor) {
         this(taskService, environmentService, diagnosisService, environmentProvisioner, environmentMapper,
-                lifecycleProperties, provisioningProperties, lifecycleExecutor, Clock.systemDefaultZone());
+                lifecycleProperties, provisioningProperties, provisioningCapacity, lifecycleExecutor,
+                Clock.systemDefaultZone());
     }
 
     TaskLifecycleOrchestrator(TaskService taskService,
@@ -85,6 +102,7 @@ public class TaskLifecycleOrchestrator {
                               EnvironmentMapper environmentMapper,
                               LifecycleProperties lifecycleProperties,
                               ProvisioningProperties provisioningProperties,
+                              ProvisioningCapacity provisioningCapacity,
                               Executor lifecycleExecutor,
                               Clock clock) {
         this.taskService = taskService;
@@ -94,6 +112,7 @@ public class TaskLifecycleOrchestrator {
         this.environmentMapper = environmentMapper;
         this.lifecycleProperties = lifecycleProperties;
         this.provisioningProperties = provisioningProperties;
+        this.provisioningCapacity = provisioningCapacity;
         this.lifecycleExecutor = lifecycleExecutor;
         this.clock = clock;
     }
@@ -125,9 +144,18 @@ public class TaskLifecycleOrchestrator {
             case "SUCCESS", "CANCELLED" -> releaseForTask(event.taskId());
             case "FAILED" -> onFailed(event.taskId());
             default -> {
-                // QUEUED、RUNNING 不在这里处理
+                // QUEUED、RUNNING、出队时短暂的 PENDING 不在这里改环境
             }
         }
+        scheduleDrain();
+    }
+
+    /**
+     * 环境变为 IDLE 后尝试出队。提交到生命周期线程池，避免释放接口等到容器启动完。
+     */
+    @EventListener
+    public void onEnvironmentReleased(EnvironmentReleasedEvent event) {
+        scheduleDrain();
     }
 
     /**
@@ -139,32 +167,33 @@ public class TaskLifecycleOrchestrator {
             return;
         }
         List<Task> pending = taskService.listTasksByStatus("PENDING");
-        if (pending == null || pending.isEmpty()) {
-            return;
-        }
         LocalDateTime cutoff = now().minus(PENDING_MIN_AGE);
         int submitted = 0;
-        for (Task task : pending) {
-            if (submitted >= PENDING_BATCH_LIMIT) {
-                break;
+        if (pending != null) {
+            for (Task task : pending) {
+                if (submitted >= PENDING_BATCH_LIMIT) {
+                    break;
+                }
+                if (task == null || task.getId() == null || task.getCreatedAt() == null) {
+                    continue;
+                }
+                if (!task.getCreatedAt().isBefore(cutoff)) {
+                    continue;
+                }
+                Long taskId = task.getId();
+                submit(() -> provisionTask(taskId));
+                submitted++;
             }
-            if (task == null || task.getId() == null || task.getCreatedAt() == null) {
-                continue;
-            }
-            if (!task.getCreatedAt().isBefore(cutoff)) {
-                continue;
-            }
-            Long taskId = task.getId();
-            submit(() -> provisionTask(taskId));
-            submitted++;
         }
         if (submitted > 0) {
             log.info("已提交遗漏的 PENDING 任务: count={}", submitted);
         }
+        scheduleDrain();
     }
 
     /**
-     * 比较并设置 PENDING→QUEUED 成功才供给。供给期间被取消时释放新环境。
+     * 容量够且没有更高优先级的排队任务时，比较并设置 PENDING→QUEUED 再供给。
+     * 否则写成带 queuedAt 的 QUEUED，不创建环境。供给期间被取消时释放新环境。
      * 供给失败但异常带了环境编号时，先绑定再标失败，不立刻释放。环境保持 ERROR。
      */
     void provisionTask(Long taskId) {
@@ -172,11 +201,39 @@ public class TaskLifecycleOrchestrator {
             log.debug("自动供给已关闭，跳过: taskId={}", taskId);
             return;
         }
-        if (!taskService.transitionStatus(taskId, "PENDING", "QUEUED")) {
-            log.info("任务未处于 PENDING，跳过供给: taskId={}", taskId);
+        if (taskId == null) {
             return;
         }
+        boolean admitted = false;
+        admissionLock.lock();
+        try {
+            if (shouldQueue(taskId)) {
+                taskService.markQueued(taskId, now());
+            } else if (taskService.transitionStatus(taskId, "PENDING", "QUEUED")) {
+                provisioningCapacity.reserve(taskId, provisioningCapacity.containersNeeded(taskId));
+                admitted = true;
+            } else {
+                log.info("任务未处于 PENDING，跳过供给: taskId={}", taskId);
+            }
+        } finally {
+            admissionLock.unlock();
+        }
+        if (!admitted) {
+            scheduleDrain();
+            return;
+        }
+        try {
+            provisionAfterClaim(taskId);
+        } finally {
+            provisioningCapacity.release(taskId);
+            scheduleDrain();
+        }
+    }
 
+    /**
+     * 调用方已经把任务认领为供给中的 QUEUED（queuedAt 为空）并占住容量。
+     */
+    private void provisionAfterClaim(Long taskId) {
         Task task;
         try {
             task = taskService.getTaskById(taskId);
@@ -238,6 +295,103 @@ public class TaskLifecycleOrchestrator {
             return;
         }
         log.info("任务进入 RUNNING: taskId={}, envId={}", taskId, environment.getId());
+    }
+
+    /**
+     * 按优先级和排队时间出队，能放下多少就启动多少。
+     * 同一任务并发出队时，QUEUED→PENDING 的条件更新只有一个成功。
+     */
+    void drainQueue() {
+        if (!lifecycleProperties.isAutoProvision()) {
+            return;
+        }
+        if (drainDepth.get() > 0) {
+            return;
+        }
+        drainDepth.set(1);
+        try {
+            while (true) {
+                List<Long> claimed = claimWaiting();
+                if (claimed.isEmpty()) {
+                    return;
+                }
+                log.info("开始出队: count={}", claimed.size());
+                for (Long taskId : claimed) {
+                    try {
+                        provisionAfterClaim(taskId);
+                    } finally {
+                        provisioningCapacity.release(taskId);
+                    }
+                }
+            }
+        } finally {
+            drainDepth.set(0);
+        }
+    }
+
+    private boolean shouldQueue(Long taskId) {
+        if (provisioningCapacity.wouldExceed(taskId)) {
+            return true;
+        }
+        List<Task> waiting = taskService.listWaitingQueued();
+        if (waiting == null || waiting.isEmpty()) {
+            return false;
+        }
+        Task candidate = taskService.lookupTask(taskId);
+        if (candidate == null) {
+            return true;
+        }
+        for (Task queued : waiting) {
+            if (QueueOrder.outranks(queued, candidate)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 在准入锁里认领所有当前放得下的排队任务。供给中的 QUEUED 不会被认领。
+     */
+    private List<Long> claimWaiting() {
+        admissionLock.lock();
+        try {
+            List<Task> waiting = taskService.listWaitingQueued();
+            if (waiting == null || waiting.isEmpty()) {
+                return List.of();
+            }
+            List<Task> ordered = new ArrayList<>();
+            for (Task task : waiting) {
+                if (task != null && task.getId() != null) {
+                    ordered.add(task);
+                }
+            }
+            ordered.sort(QueueOrder.COMPARATOR);
+            List<Long> claimed = new ArrayList<>();
+            for (Task task : ordered) {
+                if (provisioningCapacity.wouldExceed(task.getId())) {
+                    continue;
+                }
+                if (!taskService.claimQueued(task.getId())) {
+                    continue;
+                }
+                if (!taskService.transitionStatus(task.getId(), "PENDING", "QUEUED")) {
+                    log.info("出队后未能进入供给: taskId={}", task.getId());
+                    continue;
+                }
+                provisioningCapacity.reserve(task.getId(), provisioningCapacity.containersNeeded(task.getId()));
+                claimed.add(task.getId());
+            }
+            return claimed;
+        } finally {
+            admissionLock.unlock();
+        }
+    }
+
+    private void scheduleDrain() {
+        if (!lifecycleProperties.isAutoProvision()) {
+            return;
+        }
+        submit(this::drainQueue);
     }
 
     /**

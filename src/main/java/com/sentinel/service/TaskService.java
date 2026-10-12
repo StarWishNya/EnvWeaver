@@ -26,7 +26,10 @@ import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
@@ -179,6 +182,9 @@ public class TaskService {
             log.info("任务状态未变化，跳过: taskId={}, status={}", taskId, status);
             return;
         }
+        if ("QUEUED".equals(oldStatus) && !"CANCELLED".equals(status)) {
+            throw new BusinessException(ErrorCode.OPERATION_NOT_ALLOWED, "排队中的任务只能取消");
+        }
         task.setStatus(status);
         applyStatusTimestamps(task, status);
         
@@ -208,6 +214,86 @@ public class TaskService {
         }
         log.info("任务状态切换: taskId={}, {} -> {}", taskId, expected, next);
         return true;
+    }
+
+    /**
+     * 比较并设置 PENDING→QUEUED，并在首次排队时写入 queuedAt。不是 PENDING 时返回 false，不发事件。
+     */
+    @Transactional
+    public boolean markQueued(Long taskId, LocalDateTime queuedAt) {
+        if (taskId == null || queuedAt == null) {
+            return false;
+        }
+        int updated = taskMapper.markQueued(taskId, queuedAt);
+        if (updated == 0) {
+            log.info("任务未能进入排队: taskId={}", taskId);
+            return false;
+        }
+        eventPublisher.publishEvent(new TaskStatusChangedEvent(taskId, "PENDING", "QUEUED"));
+        log.info("任务进入排队: taskId={}, queuedAt={}", taskId, queuedAt);
+        return true;
+    }
+
+    /**
+     * 出队认领：QUEUED 且已有 queuedAt 时改回 PENDING 并清空 queuedAt。
+     * 条件更新保证并发出队只有一个成功。供给中的 QUEUED 不匹配。
+     */
+    @Transactional
+    public boolean claimQueued(Long taskId) {
+        if (taskId == null) {
+            return false;
+        }
+        int updated = taskMapper.claimQueued(taskId);
+        if (updated == 0) {
+            log.info("出队未命中: taskId={}", taskId);
+            return false;
+        }
+        eventPublisher.publishEvent(new TaskStatusChangedEvent(taskId, "QUEUED", "PENDING"));
+        log.info("任务出队: taskId={}", taskId);
+        return true;
+    }
+
+    /**
+     * 正在排队的任务，已按出队顺序排好。没有则返回空列表。
+     */
+    public List<Task> listWaitingQueued() {
+        List<Task> rows = taskMapper.findWaitingQueued();
+        if (rows == null || rows.isEmpty()) {
+            return List.of();
+        }
+        List<Task> ordered = new ArrayList<>();
+        for (Task task : rows) {
+            if (task != null) {
+                ordered.add(task);
+            }
+        }
+        ordered.sort(QueueOrder.COMPARATOR);
+        return ordered;
+    }
+
+    /**
+     * 排队位次，从 1 开始。只包含正在排队的任务。
+     */
+    public Map<Long, Integer> queuePositions() {
+        List<Task> waiting = listWaitingQueued();
+        Map<Long, Integer> positions = new LinkedHashMap<>();
+        int position = 1;
+        for (Task task : waiting) {
+            if (task.getId() != null) {
+                positions.put(task.getId(), position++);
+            }
+        }
+        return positions;
+    }
+
+    /**
+     * 读取任务。不存在时返回 null，不抛 404。
+     */
+    public Task lookupTask(Long taskId) {
+        if (taskId == null) {
+            return null;
+        }
+        return taskMapper.selectById(taskId);
     }
 
     /**

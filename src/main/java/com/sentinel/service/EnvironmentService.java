@@ -8,9 +8,12 @@ import com.sentinel.domain.Container;
 import com.sentinel.domain.Environment;
 import com.sentinel.dto.EnvironmentDTO;
 import com.sentinel.enums.ErrorCode;
+import com.sentinel.event.EnvironmentReleasedEvent;
 import com.sentinel.mapper.ContainerMapper;
 import com.sentinel.mapper.EnvironmentMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -46,14 +49,25 @@ public class EnvironmentService {
     private final EnvironmentMapper environmentMapper;
     private final ContainerMapper containerMapper;
     private final DockerService dockerService;
+    private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public EnvironmentService(EnvironmentMapper environmentMapper,
                               ContainerMapper containerMapper,
                               DockerService dockerService) {
+        this(environmentMapper, containerMapper, dockerService, event -> {
+        });
+    }
+
+    @Autowired
+    public EnvironmentService(EnvironmentMapper environmentMapper,
+                              ContainerMapper containerMapper,
+                              DockerService dockerService,
+                              ApplicationEventPublisher eventPublisher) {
         this.environmentMapper = environmentMapper;
         this.containerMapper = containerMapper;
         this.dockerService = dockerService;
+        this.eventPublisher = eventPublisher;
     }
 
     /**
@@ -107,6 +121,9 @@ public class EnvironmentService {
             environment.setStatus(STATUS_IDLE);
             environmentMapper.updateById(environment);
             log.info("环境已释放: envId={}", environment.getId());
+            if (eventPublisher != null) {
+                eventPublisher.publishEvent(new EnvironmentReleasedEvent(environment.getId()));
+            }
         } catch (BusinessException ex) {
             markError(environment);
             throw ex;

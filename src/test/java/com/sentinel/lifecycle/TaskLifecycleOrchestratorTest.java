@@ -15,6 +15,8 @@ import com.sentinel.mapper.EnvironmentMapper;
 import com.sentinel.service.DiagnosisService;
 import com.sentinel.service.EnvironmentProvisioner;
 import com.sentinel.service.EnvironmentService;
+import com.sentinel.service.ProvisioningCapacity;
+import com.sentinel.service.ProvisioningUsage;
 import com.sentinel.service.TaskService;
 import com.sentinel.service.provision.ProvisioningFailedException;
 import org.junit.jupiter.api.BeforeAll;
@@ -33,8 +35,17 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -77,6 +88,7 @@ class TaskLifecycleOrchestratorTest {
 
     private LifecycleProperties properties;
     private ProvisioningProperties provisioningProperties;
+    private final FakeCapacity capacity = new FakeCapacity();
     private TaskLifecycleOrchestrator orchestrator;
 
     @BeforeAll
@@ -474,9 +486,155 @@ class TaskLifecycleOrchestratorTest {
         verifyNoInteractions(environmentProvisioner);
     }
 
+    @Test
+    @DisplayName("超过上限时补扫把 PENDING 放进排队，不供给")
+    void shouldQueueOldPendingWhenCapacityIsFull() {
+        capacity.exceed = true;
+        Task old = queuedTask(2L);
+        old.setStatus("PENDING");
+        old.setCreatedAt(NOW.minusMinutes(5));
+        when(taskService.listTasksByStatus("PENDING")).thenReturn(List.of(old));
+        when(taskService.markQueued(2L, NOW)).thenReturn(true);
+
+        orchestrator.sweepPending();
+
+        verify(taskService).markQueued(2L, NOW);
+        verify(environmentProvisioner, never()).provision(any());
+        verify(taskService, never()).transitionStatus(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("出队按优先级而不是列表原顺序，放不下的留在队列")
+    void shouldStartHigherPriorityQueuedTaskWhenOnlyOneSlotFits() {
+        capacity.slots = 1;
+        capacity.retainOnRelease = true;
+        Task low = queuedTask(2L);
+        low.setPriority(1);
+        low.setQueuedAt(NOW.minusMinutes(5));
+        Task high = queuedTask(1L);
+        high.setPriority(9);
+        high.setQueuedAt(NOW.minusSeconds(1));
+        when(taskService.listWaitingQueued()).thenReturn(List.of(low, high));
+        when(taskService.claimQueued(1L)).thenReturn(true);
+        when(taskService.transitionStatus(1L, "PENDING", "QUEUED")).thenReturn(true);
+        when(taskService.transitionStatus(1L, "QUEUED", "RUNNING")).thenReturn(true);
+        when(taskService.getTaskById(1L)).thenReturn(high);
+        when(environmentProvisioner.provision(high)).thenReturn(environment(9L, "READY"));
+        when(environmentMapper.update(isNull(), any())).thenReturn(1);
+
+        orchestrator.drainQueue();
+
+        verify(environmentProvisioner, times(1)).provision(high);
+        verify(taskService, never()).claimQueued(2L);
+        verify(environmentProvisioner, never()).provision(low);
+    }
+
+    @Test
+    @DisplayName("两个并发出队只有一个能供给")
+    void shouldProvisionOnceWhenTwoDequeuesRace() throws Exception {
+        Task task = queuedTask(7L);
+        task.setPriority(5);
+        task.setQueuedAt(NOW.minusSeconds(5));
+        AtomicReference<String> status = new AtomicReference<>("QUEUED");
+        AtomicReference<LocalDateTime> queuedAt = new AtomicReference<>(task.getQueuedAt());
+        when(taskService.listWaitingQueued()).thenAnswer(invocation -> {
+            if ("QUEUED".equals(status.get()) && queuedAt.get() != null) {
+                task.setStatus("QUEUED");
+                task.setQueuedAt(queuedAt.get());
+                return List.of(task);
+            }
+            return List.of();
+        });
+        when(taskService.claimQueued(7L)).thenAnswer(invocation -> {
+            synchronized (status) {
+                if ("QUEUED".equals(status.get()) && queuedAt.get() != null) {
+                    status.set("PENDING");
+                    queuedAt.set(null);
+                    task.setStatus("PENDING");
+                    task.setQueuedAt(null);
+                    return true;
+                }
+                return false;
+            }
+        });
+        when(taskService.transitionStatus(7L, "PENDING", "QUEUED")).thenAnswer(invocation -> {
+            synchronized (status) {
+                if ("PENDING".equals(status.get())) {
+                    status.set("QUEUED");
+                    task.setStatus("QUEUED");
+                    return true;
+                }
+                return false;
+            }
+        });
+        when(taskService.transitionStatus(7L, "QUEUED", "RUNNING")).thenReturn(true);
+        when(taskService.getTaskById(7L)).thenReturn(task);
+        when(environmentProvisioner.provision(any())).thenAnswer(invocation -> {
+            Thread.sleep(40);
+            return environment(9L, "READY");
+        });
+        when(environmentMapper.update(isNull(), any())).thenReturn(1);
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            CountDownLatch start = new CountDownLatch(1);
+            Callable<Void> work = () -> {
+                start.await(5, TimeUnit.SECONDS);
+                orchestrator.drainQueue();
+                return null;
+            };
+            Future<Void> first = pool.submit(work);
+            Future<Void> second = pool.submit(work);
+            start.countDown();
+            first.get(10, TimeUnit.SECONDS);
+            second.get(10, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        verify(environmentProvisioner, times(1)).provision(any());
+    }
+
     private TaskLifecycleOrchestrator orchestrator(Executor executor) {
         return new TaskLifecycleOrchestrator(taskService, environmentService, diagnosisService,
-                environmentProvisioner, environmentMapper, properties, provisioningProperties, executor, CLOCK);
+                environmentProvisioner, environmentMapper, properties, provisioningProperties,
+                capacity, executor, CLOCK);
+    }
+
+    private static final class FakeCapacity implements ProvisioningCapacity {
+        private boolean exceed;
+        private int slots = Integer.MAX_VALUE;
+        private boolean retainOnRelease;
+        private final Set<Long> held = ConcurrentHashMap.newKeySet();
+
+        @Override
+        public boolean wouldExceed(Long taskId) {
+            return exceed || held.size() >= slots;
+        }
+
+        @Override
+        public int containersNeeded(Long taskId) {
+            return 1;
+        }
+
+        @Override
+        public void reserve(Long taskId, int containers) {
+            if (taskId != null) {
+                held.add(taskId);
+            }
+        }
+
+        @Override
+        public void release(Long taskId) {
+            if (!retainOnRelease && taskId != null) {
+                held.remove(taskId);
+            }
+        }
+
+        @Override
+        public ProvisioningUsage usage() {
+            return ProvisioningUsage.defaults();
+        }
     }
 
     private static Task queuedTask(Long id) {

@@ -228,6 +228,10 @@ sentinel:
     host: localhost
     # 容器端口只发布到本机，环境内数据库为固定弱口令
     bind-address: ${SENTINEL_PROVISIONING_BIND_ADDRESS:127.0.0.1}
+    # 0 或负数表示不限制。单机用进程内锁；多实例需要分布式锁。
+    limits:
+      max-active-environments: 10
+      max-containers: 30
 
   # 运行中容器的 CPU、内存采样
   monitoring:

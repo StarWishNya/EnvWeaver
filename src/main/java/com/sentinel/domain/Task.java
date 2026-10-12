@@ -71,6 +71,11 @@ public class Task {
     private LocalDateTime completedAt;
 
     /**
+     * 进入排队的时间。供给开始后清空。为空表示不是在排队，而是供给中的 QUEUED。
+     */
+    private LocalDateTime queuedAt;
+
+    /**
      * 创建时间
      */
     @TableField(fill = FieldFill.INSERT)

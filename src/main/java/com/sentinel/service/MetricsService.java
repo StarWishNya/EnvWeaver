@@ -7,6 +7,7 @@ import com.sentinel.dto.SystemMetrics;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -40,19 +41,31 @@ public class MetricsService {
     private final DockerClient dockerClient;
     private final List<ComponentHealthChecker> checkers;
     private final Duration timeout;
+    private final ProvisioningCapacity provisioningCapacity;
     private final ExecutorService healthExecutor;
     private final HostMetrics.CpuLoadSamples cpuLoadSamples = new HostMetrics.CpuLoadSamples();
     private final AtomicBoolean cpuPrimeStarted = new AtomicBoolean(false);
 
     @Autowired
-    public MetricsService(DockerClient dockerClient, List<ComponentHealthChecker> checkers) {
-        this(HostMetrics.system(), dockerClient, checkers, HEALTH_CHECK_TIMEOUT);
+    public MetricsService(DockerClient dockerClient,
+                          List<ComponentHealthChecker> checkers,
+                          ObjectProvider<ProvisioningCapacity> provisioningCapacity) {
+        this(HostMetrics.system(), dockerClient, checkers, HEALTH_CHECK_TIMEOUT,
+                provisioningCapacity == null ? null : provisioningCapacity.getIfAvailable());
     }
 
     MetricsService(HostMetrics hostMetrics,
                    DockerClient dockerClient,
                    List<ComponentHealthChecker> checkers,
                    Duration timeout) {
+        this(hostMetrics, dockerClient, checkers, timeout, null);
+    }
+
+    MetricsService(HostMetrics hostMetrics,
+                   DockerClient dockerClient,
+                   List<ComponentHealthChecker> checkers,
+                   Duration timeout,
+                   ProvisioningCapacity provisioningCapacity) {
         this.hostMetrics = hostMetrics;
         this.dockerClient = dockerClient;
         this.checkers = checkers == null
@@ -61,6 +74,7 @@ public class MetricsService {
         this.timeout = timeout == null || timeout.isZero() || timeout.isNegative()
                 ? HEALTH_CHECK_TIMEOUT
                 : timeout;
+        this.provisioningCapacity = provisioningCapacity;
         this.healthExecutor = Executors.newCachedThreadPool(runnable -> {
             Thread thread = new Thread(runnable, "metrics-health-check");
             thread.setDaemon(true);
@@ -90,7 +104,32 @@ public class MetricsService {
         metrics.setMemory(readMemory());
         metrics.setDisk(readDisk());
         metrics.setContainers(readContainers());
+        applyProvisioning(metrics);
         return metrics;
+    }
+
+    private void applyProvisioning(SystemMetrics metrics) {
+        ProvisioningUsage usage = readProvisioningUsage();
+        metrics.setActiveEnvironments(usage.activeEnvironments());
+        metrics.setActiveContainers(usage.activeContainers());
+        metrics.setQueuedTasks(usage.queuedTasks());
+        SystemMetrics.Limits limits = new SystemMetrics.Limits();
+        limits.setMaxActiveEnvironments(usage.maxActiveEnvironments());
+        limits.setMaxContainers(usage.maxContainers());
+        metrics.setLimits(limits);
+    }
+
+    private ProvisioningUsage readProvisioningUsage() {
+        if (provisioningCapacity == null) {
+            return ProvisioningUsage.defaults();
+        }
+        try {
+            ProvisioningUsage usage = provisioningCapacity.usage();
+            return usage == null ? ProvisioningUsage.defaults() : usage;
+        } catch (RuntimeException ex) {
+            log.warn("供给占用读取失败: {}", ex.getClass().getSimpleName());
+            return ProvisioningUsage.defaults();
+        }
     }
 
     /**

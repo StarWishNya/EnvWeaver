@@ -165,6 +165,9 @@ sentinel:
     pull-timeout: ${SENTINEL_PROVISION_PULL_TIMEOUT:5m}
     ready-timeout: ${SENTINEL_PROVISION_READY_TIMEOUT:90s}
     host: ${SENTINEL_PROVISION_HOST:localhost}
+    limits:
+      max-active-environments: ${SENTINEL_PROVISION_MAX_ACTIVE_ENVIRONMENTS:10}
+      max-containers: ${SENTINEL_PROVISION_MAX_CONTAINERS:30}
     # 依赖以 catalog/middleware.yaml 为准。覆盖默认版本或口令时再写 dependencies.<kind>。
 
   # 运行中容器的 CPU、内存采样

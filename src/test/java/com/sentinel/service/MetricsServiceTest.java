@@ -73,6 +73,39 @@ class MetricsServiceTest {
         assertThat(metrics.getContainers().getRunning()).isEqualTo(3);
         assertThat(metrics.getContainers().getPaused()).isEqualTo(2);
         assertThat(metrics.getContainers().getStopped()).isEqualTo(4);
+        assertThat(metrics.getActiveEnvironments()).isZero();
+        assertThat(metrics.getActiveContainers()).isZero();
+        assertThat(metrics.getQueuedTasks()).isZero();
+        assertThat(metrics.getLimits().getMaxActiveEnvironments()).isEqualTo(10);
+        assertThat(metrics.getLimits().getMaxContainers()).isEqualTo(30);
+    }
+
+    @Test
+    @DisplayName("供给占用写入指标，读取失败时用默认上限")
+    void includesProvisioningUsageAndFallsBack() {
+        ProvisioningCapacity capacity = mock(ProvisioningCapacity.class);
+        when(capacity.usage()).thenReturn(new ProvisioningUsage(4, 9, 2, 7, 11));
+        MetricsService service = new MetricsService(
+                fixedHost(), dockerClientReturning(List.of()), List.of(), Duration.ofSeconds(2), capacity);
+        services.add(service);
+
+        SystemMetrics metrics = service.getSystemMetrics();
+
+        assertThat(metrics.getActiveEnvironments()).isEqualTo(4);
+        assertThat(metrics.getActiveContainers()).isEqualTo(9);
+        assertThat(metrics.getQueuedTasks()).isEqualTo(2);
+        assertThat(metrics.getLimits().getMaxActiveEnvironments()).isEqualTo(7);
+        assertThat(metrics.getLimits().getMaxContainers()).isEqualTo(11);
+
+        when(capacity.usage()).thenReturn(null);
+        SystemMetrics missing = service.getSystemMetrics();
+        assertThat(missing.getActiveEnvironments()).isZero();
+        assertThat(missing.getLimits().getMaxContainers()).isEqualTo(30);
+
+        when(capacity.usage()).thenThrow(new IllegalStateException("db"));
+        SystemMetrics failed = service.getSystemMetrics();
+        assertThat(failed.getQueuedTasks()).isZero();
+        assertThat(failed.getLimits().getMaxActiveEnvironments()).isEqualTo(10);
     }
 
     @Test

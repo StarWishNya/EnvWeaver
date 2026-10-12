@@ -411,6 +411,18 @@ components:
             type: string
         status:
           $ref: '#/components/schemas/TaskStatus'
+        queuedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 进入排队的时间。正在排队时有值；出队开始供给后清空。
+        queuePosition:
+          type: integer
+          minimum: 1
+          nullable: true
+          description: |
+            排队位次，从 1 开始。仅当 status 为 QUEUED 且 queuedAt 有值时返回。
+            排序与出队一致：priority 降序，queuedAt 升序，id 升序。
         priority:
           type: integer
           minimum: 1
@@ -608,6 +620,25 @@ components:
               type: integer
             stopped:
               type: integer
+        activeEnvironments:
+          type: integer
+          description: 占用中的环境数。统计 CREATING、READY、BUSY、RETAINED、RELEASING。
+        activeContainers:
+          type: integer
+          description: 上述环境中的容器数。
+        queuedTasks:
+          type: integer
+          description: 正在排队、尚未开始供给的任务数。
+        limits:
+          type: object
+          description: sentinel.provisioning.limits。0 或负数表示该项不限制。
+          properties:
+            maxActiveEnvironments:
+              type: integer
+              description: 最大占用环境数。0 或负数表示不限制。
+            maxContainers:
+              type: integer
+              description: 最大容器数，含占用环境中的容器加上新任务需要的容器。0 或负数表示不限制。
 
     UpDown:
       type: string

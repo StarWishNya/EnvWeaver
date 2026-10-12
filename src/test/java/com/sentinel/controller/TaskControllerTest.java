@@ -35,11 +35,13 @@ import org.springframework.http.MediaType;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
@@ -725,6 +727,57 @@ public class TaskControllerTest {
 
         verify(taskService).createTask(argThat(request ->
                 "data-stack".equals(request.getTemplate()) && request.getDependencies().isEmpty()));
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("排队任务返回 queuedAt 和 queuePosition，运行中任务没有位次")
+    public void shouldExposeQueueFields() throws Exception {
+        LocalDateTime queuedAt = LocalDateTime.of(2026, 10, 10, 1, 2, 3);
+        Task queued = TaskBuilder.aTask().withId(3L).withStatus("QUEUED").withTaskCode("Q-1").build();
+        queued.setQueuedAt(queuedAt);
+        queued.setEnvironmentId(null);
+        when(taskService.getTaskById(3L)).thenReturn(queued);
+        when(taskService.queuePositions()).thenReturn(Map.of(3L, 2));
+
+        mockMvc.perform(get("/api/tasks/{taskId}", 3L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("QUEUED"))
+                .andExpect(jsonPath("$.data.queuedAt").value("2026-10-10T01:02:03"))
+                .andExpect(jsonPath("$.data.queuePosition").value(2))
+                .andExpect(jsonPath("$.data.environmentId").value(nullValue()));
+
+        Task running = TaskBuilder.aTask().withId(4L).running().build();
+        when(taskService.getTaskById(4L)).thenReturn(running);
+        when(taskService.queuePositions()).thenReturn(Map.of(4L, 1));
+
+        mockMvc.perform(get("/api/tasks/{taskId}", 4L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("RUNNING"))
+                .andExpect(jsonPath("$.data.queuePosition").value(nullValue()));
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("按 QUEUED 过滤任务列表")
+    public void shouldListQueuedTasks() throws Exception {
+        LocalDateTime queuedAt = LocalDateTime.of(2026, 10, 10, 8, 0);
+        Task queued = TaskBuilder.aTask().withId(6L).withStatus("QUEUED").build();
+        queued.setQueuedAt(queuedAt);
+        IPage<Task> page = new Page<>(1, 20);
+        page.setRecords(List.of(queued));
+        page.setTotal(1);
+        when(taskService.listTasks(0, 20, "QUEUED", null)).thenReturn(page);
+        when(taskService.queuePositions()).thenReturn(Map.of(6L, 1));
+
+        mockMvc.perform(get("/api/tasks").param("status", "QUEUED"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content.length()").value(1))
+                .andExpect(jsonPath("$.data.content[0].status").value("QUEUED"))
+                .andExpect(jsonPath("$.data.content[0].queuePosition").value(1))
+                .andExpect(jsonPath("$.data.content[0].queuedAt").value("2026-10-10T08:00:00"));
+
+        verify(taskService).listTasks(0, 20, "QUEUED", null);
     }
 
     @Test

@@ -20,6 +20,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 任务管理控制器
@@ -47,7 +48,7 @@ public class TaskController {
     public ApiResponse<TaskResponse> createTask(@Valid @RequestBody CreateTaskRequest request) {
         log.info("创建任务请求: taskCode={}", request.getTaskCode());
         Task task = taskService.createTask(request);
-        return ApiResponse.success(TaskResponse.from(task));
+        return ApiResponse.success(toResponse(task));
     }
 
     /**
@@ -58,7 +59,7 @@ public class TaskController {
     public ApiResponse<TaskResponse> getTask(
             @Parameter(description = "任务 ID") @PathVariable Long taskId) {
         Task task = taskService.getTaskById(taskId);
-        return ApiResponse.success(TaskResponse.from(task));
+        return ApiResponse.success(toResponse(task));
     }
 
     /**
@@ -73,13 +74,23 @@ public class TaskController {
             @Parameter(description = "测试类型") @RequestParam(required = false) String testType) {
         TaskService.checkListQuery(page, size, status, testType);
         IPage<Task> result = taskService.listTasks(page, size, status, testType);
+        Map<Long, Integer> positions = queuePositions();
         PageResponse<TaskResponse> body = new PageResponse<>();
-        body.setContent(result.getRecords().stream().map(TaskResponse::from).toList());
+        body.setContent(result.getRecords().stream().map(task -> TaskResponse.from(task, positions)).toList());
         body.setPage(page);
         body.setSize(size);
         body.setTotalElements(result.getTotal());
         body.setTotalPages(totalPages(result.getTotal(), size));
         return ApiResponse.success(body);
+    }
+
+    private TaskResponse toResponse(Task task) {
+        return TaskResponse.from(task, queuePositions());
+    }
+
+    private Map<Long, Integer> queuePositions() {
+        Map<Long, Integer> positions = taskService.queuePositions();
+        return positions == null ? Map.of() : positions;
     }
 
     private static long totalPages(long totalElements, int size) {
@@ -96,8 +107,9 @@ public class TaskController {
     @Operation(summary = "根据状态查询任务", description = "查询指定状态的所有任务")
     public ApiResponse<List<TaskResponse>> listTasksByStatus(
             @Parameter(description = "任务状态") @PathVariable String status) {
+        Map<Long, Integer> positions = queuePositions();
         List<TaskResponse> tasks = taskService.listTasksByStatus(status).stream()
-                .map(TaskResponse::from)
+                .map(task -> TaskResponse.from(task, positions))
                 .toList();
         return ApiResponse.success(tasks);
     }

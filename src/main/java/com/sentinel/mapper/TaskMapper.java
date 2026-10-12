@@ -68,6 +68,36 @@ public interface TaskMapper extends BaseMapper<Task> {
                             @Param("completedAt") LocalDateTime completedAt);
 
     /**
+     * 仍在排队的任务。priority 降序，queuedAt 升序，id 升序。
+     * queued_at 为空的 QUEUED 是供给中的认领，不算排队。
+     */
+    @Select("SELECT * FROM t_task WHERE status = 'QUEUED' AND queued_at IS NOT NULL " +
+            "ORDER BY priority DESC, queued_at ASC, id ASC")
+    List<Task> findWaitingQueued();
+
+    /**
+     * 正在排队的任务数。
+     */
+    @Select("SELECT COUNT(*) FROM t_task WHERE status = 'QUEUED' AND queued_at IS NOT NULL")
+    Integer countWaitingQueued();
+
+    /**
+     * PENDING 进入排队并写入 queued_at。已经有排队时间时不覆盖。不是 PENDING 时不更新。
+     */
+    @Update("UPDATE t_task SET status = 'QUEUED', " +
+            "queued_at = IF(queued_at IS NULL, #{queuedAt,jdbcType=TIMESTAMP}, queued_at) " +
+            "WHERE id = #{taskId} AND status = 'PENDING'")
+    int markQueued(@Param("taskId") Long taskId, @Param("queuedAt") LocalDateTime queuedAt);
+
+    /**
+     * 出队认领。只有仍在排队（QUEUED 且 queued_at 非空）时把状态改回 PENDING 并清空 queued_at。
+     * 供给中的 QUEUED（queued_at 为空）不匹配，避免同一个任务被供给两次。
+     */
+    @Update("UPDATE t_task SET status = 'PENDING', queued_at = NULL " +
+            "WHERE id = #{taskId} AND status = 'QUEUED' AND queued_at IS NOT NULL")
+    int claimQueued(@Param("taskId") Long taskId);
+
+    /**
      * 只更新环境 ID，避免把并发改过的状态写回去。
      */
     @Update("UPDATE t_task SET environment_id = #{environmentId,jdbcType=BIGINT} WHERE id = #{taskId}")

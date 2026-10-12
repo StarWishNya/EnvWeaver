@@ -115,7 +115,12 @@ class MetricsControllerTest {
                 .andExpect(jsonPath("$.data.disk.usage").exists())
                 .andExpect(jsonPath("$.data.containers.running").value(2))
                 .andExpect(jsonPath("$.data.containers.paused").value(1))
-                .andExpect(jsonPath("$.data.containers.stopped").value(3));
+                .andExpect(jsonPath("$.data.containers.stopped").value(3))
+                .andExpect(jsonPath("$.data.activeEnvironments").value(0))
+                .andExpect(jsonPath("$.data.activeContainers").value(0))
+                .andExpect(jsonPath("$.data.queuedTasks").value(0))
+                .andExpect(jsonPath("$.data.limits.maxActiveEnvironments").value(10))
+                .andExpect(jsonPath("$.data.limits.maxContainers").value(30));
     }
 
     @Test

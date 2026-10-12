@@ -52,6 +52,30 @@ public class ProvisioningProperties {
     private String bindAddress = "127.0.0.1";
 
     /**
+     * 同时占用的环境数和容器数上限。0 或负数表示不限制。
+     * 单机用进程内锁判断；多实例需要分布式锁。
+     */
+    private Limits limits = new Limits();
+
+    /**
+     * 供给并发上限。
+     */
+    @Data
+    public static class Limits {
+
+        /**
+         * 占用中的环境上限。统计 CREATING、READY、BUSY、RETAINED、RELEASING。默认 10。
+         * 0 或负数表示不限制。
+         */
+        private int maxActiveEnvironments = 10;
+
+        /**
+         * 上述环境中的容器，加上新任务需要的容器。默认 30。0 或负数表示不限制。
+         */
+        private int maxContainers = 30;
+    }
+
+    /**
      * 按依赖名覆盖镜像、端口和环境变量。键不区分大小写。
      */
     private Map<String, Dependency> dependencies = new LinkedHashMap<>();
