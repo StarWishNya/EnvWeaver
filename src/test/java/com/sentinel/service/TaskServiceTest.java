@@ -15,6 +15,11 @@ import com.sentinel.mapper.TaskMapper;
 import com.sentinel.service.provision.DependencyCatalog;
 import com.sentinel.service.provision.TemplateCatalog;
 import com.sentinel.testutil.CreateTaskRequestBuilder;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
 import com.sentinel.testutil.TaskBuilder;
@@ -228,16 +233,16 @@ public class TaskServiceTest {
     public void shouldUpdateTaskStatus_whenStatusIsRunning() {
         // Given
         when(taskMapper.selectById(1L)).thenReturn(testTask);
-        when(taskMapper.updateById(any(Task.class))).thenReturn(1);
+        when(taskMapper.compareAndSetStatus(eq(1L), eq("PENDING"), eq("RUNNING"), any(LocalDateTime.class), isNull()))
+                .thenReturn(1);
 
         // When
         taskService.updateTaskStatus(1L, "RUNNING");
 
         // Then
         verify(taskMapper, times(1)).selectById(1L);
-        verify(taskMapper, times(1)).updateById(argThat((Task task) -> 
-            "RUNNING".equals(task.getStatus()) && task.getStartedAt() != null
-        ));
+        verify(taskMapper).compareAndSetStatus(eq(1L), eq("PENDING"), eq("RUNNING"), any(LocalDateTime.class), isNull());
+        verify(taskMapper, never()).updateById(any(Task.class));
         verify(eventPublisher).publishEvent(new TaskStatusChangedEvent(1L, "PENDING", "RUNNING"));
     }
 
@@ -246,15 +251,15 @@ public class TaskServiceTest {
     public void shouldUpdateTaskStatus_whenStatusIsSuccess() {
         // Given
         when(taskMapper.selectById(1L)).thenReturn(testTask);
-        when(taskMapper.updateById(any(Task.class))).thenReturn(1);
+        when(taskMapper.compareAndSetStatus(eq(1L), eq("PENDING"), eq("SUCCESS"), isNull(), any(LocalDateTime.class)))
+                .thenReturn(1);
 
         // When
         taskService.updateTaskStatus(1L, "SUCCESS");
 
         // Then
-        verify(taskMapper, times(1)).updateById(argThat((Task task) -> 
-            "SUCCESS".equals(task.getStatus()) && task.getCompletedAt() != null
-        ));
+        verify(taskMapper).compareAndSetStatus(eq(1L), eq("PENDING"), eq("SUCCESS"), isNull(), any(LocalDateTime.class));
+        verify(taskMapper, never()).updateById(any(Task.class));
         verify(eventPublisher).publishEvent(new TaskStatusChangedEvent(1L, "PENDING", "SUCCESS"));
     }
 
@@ -263,15 +268,15 @@ public class TaskServiceTest {
     public void shouldUpdateTaskStatus_whenStatusIsCancelled() {
         // Given
         when(taskMapper.selectById(1L)).thenReturn(testTask);
-        when(taskMapper.updateById(any(Task.class))).thenReturn(1);
+        when(taskMapper.compareAndSetStatus(eq(1L), eq("PENDING"), eq("CANCELLED"), isNull(), any(LocalDateTime.class)))
+                .thenReturn(1);
 
         // When
         taskService.updateTaskStatus(1L, "CANCELLED");
 
         // Then
-        verify(taskMapper, times(1)).updateById(argThat((Task task) -> 
-            "CANCELLED".equals(task.getStatus()) && task.getCompletedAt() != null
-        ));
+        verify(taskMapper).compareAndSetStatus(
+                eq(1L), eq("PENDING"), eq("CANCELLED"), isNull(), any(LocalDateTime.class));
         verify(eventPublisher).publishEvent(new TaskStatusChangedEvent(1L, "PENDING", "CANCELLED"));
     }
 
@@ -280,16 +285,16 @@ public class TaskServiceTest {
     public void shouldCancelTask_whenTaskIsPending() {
         // Given
         when(taskMapper.selectById(1L)).thenReturn(testTask);
-        when(taskMapper.updateById(any(Task.class))).thenReturn(1);
+        when(taskMapper.compareAndSetStatus(eq(1L), eq("PENDING"), eq("CANCELLED"), isNull(), any(LocalDateTime.class)))
+                .thenReturn(1);
 
         // When
         taskService.cancelTask(1L);
 
         // Then
-        verify(taskMapper, times(2)).selectById(1L);  // cancelTask 和 updateTaskStatus 各调用一次
-        verify(taskMapper, times(1)).updateById(argThat((Task task) -> 
-            "CANCELLED".equals(task.getStatus()) && task.getCompletedAt() != null
-        ));
+        verify(taskMapper, times(1)).selectById(1L);
+        verify(taskMapper).compareAndSetStatus(
+                eq(1L), eq("PENDING"), eq("CANCELLED"), isNull(), any(LocalDateTime.class));
         verify(eventPublisher).publishEvent(new TaskStatusChangedEvent(1L, "PENDING", "CANCELLED"));
     }
 
@@ -299,15 +304,15 @@ public class TaskServiceTest {
         // Given
         Task runningTask = TaskBuilder.aTask().withId(1L).running().build();
         when(taskMapper.selectById(1L)).thenReturn(runningTask);
-        when(taskMapper.updateById(any(Task.class))).thenReturn(1);
+        when(taskMapper.compareAndSetStatus(eq(1L), eq("RUNNING"), eq("CANCELLED"), isNull(), any(LocalDateTime.class)))
+                .thenReturn(1);
 
         // When
         taskService.cancelTask(1L);
 
         // Then
-        verify(taskMapper, times(1)).updateById(argThat((Task task) -> 
-            "CANCELLED".equals(task.getStatus())
-        ));
+        verify(taskMapper).compareAndSetStatus(
+                eq(1L), eq("RUNNING"), eq("CANCELLED"), isNull(), any(LocalDateTime.class));
         verify(eventPublisher, times(1)).publishEvent(new TaskStatusChangedEvent(1L, "RUNNING", "CANCELLED"));
     }
 
@@ -323,6 +328,7 @@ public class TaskServiceTest {
             .isInstanceOf(BusinessException.class)
                 .hasFieldOrPropertyWithValue("code", ErrorCode.OPERATION_NOT_ALLOWED.getCode());
         
+        verify(taskMapper, never()).compareAndSetStatus(any(), any(), any(), any(), any());
         verify(taskMapper, never()).updateById(any(Task.class));
     }
 
@@ -338,6 +344,7 @@ public class TaskServiceTest {
             .isInstanceOf(BusinessException.class)
                 .hasFieldOrPropertyWithValue("code", ErrorCode.OPERATION_NOT_ALLOWED.getCode());
         
+        verify(taskMapper, never()).compareAndSetStatus(any(), any(), any(), any(), any());
         verify(taskMapper, never()).updateById(any(Task.class));
     }
 
@@ -353,6 +360,7 @@ public class TaskServiceTest {
             .isInstanceOf(BusinessException.class)
                 .hasFieldOrPropertyWithValue("code", ErrorCode.OPERATION_NOT_ALLOWED.getCode());
         
+        verify(taskMapper, never()).compareAndSetStatus(any(), any(), any(), any(), any());
         verify(taskMapper, never()).updateById(any(Task.class));
     }
 
@@ -362,17 +370,15 @@ public class TaskServiceTest {
         // Given
         String errorMessage = "Database connection failed";
         when(taskMapper.selectById(1L)).thenReturn(testTask);
-        when(taskMapper.updateById(any(Task.class))).thenReturn(1);
+        when(taskMapper.compareAndSetFailed(eq(1L), eq("PENDING"), eq(errorMessage), any(LocalDateTime.class)))
+                .thenReturn(1);
 
         // When
-        taskService.setTaskError(1L, errorMessage);
+        assertThat(taskService.setTaskError(1L, errorMessage)).isTrue();
 
         // Then
-        verify(taskMapper, times(1)).updateById(argThat((Task task) -> 
-            "FAILED".equals(task.getStatus()) &&
-            errorMessage.equals(task.getErrorMessage()) &&
-            task.getCompletedAt() != null
-        ));
+        verify(taskMapper).compareAndSetFailed(eq(1L), eq("PENDING"), eq(errorMessage), any(LocalDateTime.class));
+        verify(taskMapper, never()).updateById(any(Task.class));
         verify(eventPublisher).publishEvent(new TaskStatusChangedEvent(1L, "PENDING", "FAILED"));
     }
 
@@ -387,6 +393,7 @@ public class TaskServiceTest {
             .isInstanceOf(BusinessException.class)
                 .hasFieldOrPropertyWithValue("code", ErrorCode.TASK_NOT_FOUND.getCode());
         
+        verify(taskMapper, never()).compareAndSetFailed(any(), any(), any(), any());
         verify(taskMapper, never()).updateById(any(Task.class));
     }
 
@@ -704,6 +711,7 @@ public class TaskServiceTest {
 
         taskService.updateTaskStatus(1L, "PENDING");
 
+        verify(taskMapper, never()).compareAndSetStatus(any(), any(), any(), any(), any());
         verify(taskMapper, never()).updateById(any(Task.class));
         verify(eventPublisher, never()).publishEvent(any());
     }
@@ -713,11 +721,12 @@ public class TaskServiceTest {
     public void shouldNotPublishWhenAlreadyFailed() {
         Task failedTask = TaskBuilder.aTask().withId(1L).failed().build();
         when(taskMapper.selectById(1L)).thenReturn(failedTask);
-        when(taskMapper.updateById(any(Task.class))).thenReturn(1);
+        when(taskMapper.updateErrorMessageIfFailed(1L, "again")).thenReturn(1);
 
-        taskService.setTaskError(1L, "again");
+        assertThat(taskService.setTaskError(1L, "again")).isFalse();
 
-        verify(taskMapper).updateById(argThat((Task task) -> "again".equals(task.getErrorMessage())));
+        verify(taskMapper).updateErrorMessageIfFailed(1L, "again");
+        verify(taskMapper, never()).compareAndSetFailed(any(), any(), any(), any());
         verify(eventPublisher, never()).publishEvent(any());
     }
 
@@ -808,14 +817,13 @@ public class TaskServiceTest {
         Task queued = TaskBuilder.aTask().withId(1L).withStatus("QUEUED").withEnvironmentId(null).build();
         queued.setQueuedAt(LocalDateTime.of(2026, 10, 10, 1, 0));
         when(taskMapper.selectById(1L)).thenReturn(queued);
-        when(taskMapper.updateById(any(Task.class))).thenReturn(1);
+        when(taskMapper.compareAndSetStatus(eq(1L), eq("QUEUED"), eq("CANCELLED"), isNull(), any(LocalDateTime.class)))
+                .thenReturn(1);
 
         taskService.cancelTask(1L);
 
-        verify(taskMapper).updateById(argThat((Task task) ->
-                "CANCELLED".equals(task.getStatus())
-                        && task.getCompletedAt() != null
-                        && task.getEnvironmentId() == null));
+        verify(taskMapper).compareAndSetStatus(eq(1L), eq("QUEUED"), eq("CANCELLED"), isNull(), any(LocalDateTime.class));
+        verify(taskMapper, never()).updateById(any(Task.class));
         verify(eventPublisher).publishEvent(new TaskStatusChangedEvent(1L, "QUEUED", "CANCELLED"));
         verifyNoInteractions(dockerService);
     }
@@ -836,11 +844,13 @@ public class TaskServiceTest {
         assertThatThrownBy(() -> taskService.updateTaskStatus(1L, "RUNNING"))
                 .isInstanceOf(BusinessException.class)
                 .hasFieldOrPropertyWithValue("code", ErrorCode.OPERATION_NOT_ALLOWED.getCode());
+        verify(taskMapper, never()).compareAndSetStatus(any(), any(), any(), any(), any());
         verify(taskMapper, never()).updateById(any(Task.class));
 
-        when(taskMapper.updateById(any(Task.class))).thenReturn(1);
+        when(taskMapper.compareAndSetStatus(eq(1L), eq("QUEUED"), eq("CANCELLED"), isNull(), any(LocalDateTime.class)))
+                .thenReturn(1);
         taskService.updateTaskStatus(1L, "CANCELLED");
-        verify(taskMapper).updateById(argThat((Task task) -> "CANCELLED".equals(task.getStatus())));
+        verify(taskMapper).compareAndSetStatus(eq(1L), eq("QUEUED"), eq("CANCELLED"), isNull(), any(LocalDateTime.class));
     }
 
     @Test
@@ -880,5 +890,198 @@ public class TaskServiceTest {
         when(taskMapper.claimQueued(1L)).thenReturn(0);
         assertThat(taskService.claimQueued(1L)).isFalse();
         verify(eventPublisher, times(1)).publishEvent(new TaskStatusChangedEvent(1L, "QUEUED", "PENDING"));
+    }
+
+    @Test
+    @DisplayName("比较并设置未命中后按重读到的状态重试，只发一次事件")
+    public void shouldRetryStatusUpdateAndPublishTheStatusActuallyReplaced() {
+        Task pending = TaskBuilder.aTask().withId(1L).pending().build();
+        Task running = TaskBuilder.aTask().withId(1L).running().build();
+        when(taskMapper.selectById(1L)).thenReturn(pending, running);
+        when(taskMapper.compareAndSetStatus(eq(1L), eq("PENDING"), eq("SUCCESS"), isNull(), any(LocalDateTime.class)))
+                .thenReturn(0);
+        when(taskMapper.compareAndSetStatus(eq(1L), eq("RUNNING"), eq("SUCCESS"), isNull(), any(LocalDateTime.class)))
+                .thenReturn(1);
+
+        taskService.updateTaskStatus(1L, "SUCCESS");
+
+        verify(eventPublisher, times(1)).publishEvent(new TaskStatusChangedEvent(1L, "RUNNING", "SUCCESS"));
+        verify(eventPublisher, never()).publishEvent(new TaskStatusChangedEvent(1L, "PENDING", "SUCCESS"));
+    }
+
+    @Test
+    @DisplayName("重读后状态已是目标值则不再写、不发事件")
+    public void shouldStopWhenRetrySeesTargetStatus() {
+        Task running = TaskBuilder.aTask().withId(1L).running().build();
+        Task success = TaskBuilder.aTask().withId(1L).success().build();
+        when(taskMapper.selectById(1L)).thenReturn(running, success);
+        when(taskMapper.compareAndSetStatus(eq(1L), eq("RUNNING"), eq("SUCCESS"), isNull(), any(LocalDateTime.class)))
+                .thenReturn(0);
+
+        taskService.updateTaskStatus(1L, "SUCCESS");
+
+        verify(taskMapper, times(1)).compareAndSetStatus(any(), any(), any(), any(), any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    @DisplayName("连续三次比较并设置未命中时返回 409 且不发事件")
+    public void shouldRejectWhenStatusUpdateLosesThreeTimes() {
+        Task running = TaskBuilder.aTask().withId(1L).running().build();
+        when(taskMapper.selectById(1L)).thenReturn(running, running, running);
+        when(taskMapper.compareAndSetStatus(eq(1L), eq("RUNNING"), eq("SUCCESS"), isNull(), any(LocalDateTime.class)))
+                .thenReturn(0);
+
+        assertThatThrownBy(() -> taskService.updateTaskStatus(1L, "SUCCESS"))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", ErrorCode.TASK_STATUS_CONFLICT.getCode())
+                .hasMessage(ErrorCode.TASK_STATUS_CONFLICT.getMessage());
+
+        verify(taskMapper, times(3)).selectById(1L);
+        verify(taskMapper, times(3)).compareAndSetStatus(any(), any(), any(), any(), any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    @DisplayName("取消未命中后按重读成功，事件里的旧状态是实际被替换的那个")
+    public void shouldRetryCancelAndPublishTheStatusActuallyReplaced() {
+        Task running = TaskBuilder.aTask().withId(1L).running().build();
+        Task pending = TaskBuilder.aTask().withId(1L).pending().build();
+        when(taskMapper.selectById(1L)).thenReturn(running, pending);
+        when(taskMapper.compareAndSetStatus(eq(1L), eq("RUNNING"), eq("CANCELLED"), isNull(), any(LocalDateTime.class)))
+                .thenReturn(0);
+        when(taskMapper.compareAndSetStatus(eq(1L), eq("PENDING"), eq("CANCELLED"), isNull(), any(LocalDateTime.class)))
+                .thenReturn(1);
+
+        taskService.cancelTask(1L);
+
+        verify(eventPublisher, times(1)).publishEvent(new TaskStatusChangedEvent(1L, "PENDING", "CANCELLED"));
+        verify(eventPublisher, never()).publishEvent(new TaskStatusChangedEvent(1L, "RUNNING", "CANCELLED"));
+    }
+
+    @Test
+    @DisplayName("取消输给失败写入时按终态拒绝，不发取消事件")
+    public void shouldNotCancelWhenFailureWinsTheRace() {
+        Task running = TaskBuilder.aTask().withId(1L).running().build();
+        Task failed = TaskBuilder.aTask().withId(1L).failed().build();
+        when(taskMapper.selectById(1L)).thenReturn(running, failed);
+        when(taskMapper.compareAndSetStatus(eq(1L), eq("RUNNING"), eq("CANCELLED"), isNull(), any(LocalDateTime.class)))
+                .thenReturn(0);
+
+        assertThatThrownBy(() -> taskService.cancelTask(1L))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", ErrorCode.OPERATION_NOT_ALLOWED.getCode())
+                .hasMessage("任务已完成，无法取消");
+
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    @DisplayName("取消连续三次未命中时返回 409 且不发事件")
+    public void shouldRejectWhenCancelLosesThreeTimes() {
+        Task running = TaskBuilder.aTask().withId(1L).running().build();
+        when(taskMapper.selectById(1L)).thenReturn(running);
+        when(taskMapper.compareAndSetStatus(eq(1L), eq("RUNNING"), eq("CANCELLED"), isNull(), any(LocalDateTime.class)))
+                .thenReturn(0);
+
+        assertThatThrownBy(() -> taskService.cancelTask(1L))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", ErrorCode.TASK_STATUS_CONFLICT.getCode())
+                .hasMessage(ErrorCode.TASK_STATUS_CONFLICT.getMessage());
+
+        verify(taskMapper, times(3)).compareAndSetStatus(any(), any(), any(), any(), any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    @DisplayName("SUCCESS 和 CANCELLED 不覆盖为失败")
+    public void shouldNotOverrideSuccessOrCancelledWithError() {
+        Logger logger = (Logger) LoggerFactory.getLogger(TaskService.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            when(taskMapper.selectById(1L)).thenReturn(
+                    TaskBuilder.aTask().withId(1L).success().build(),
+                    TaskBuilder.aTask().withId(1L).cancelled().build());
+
+            assertThat(taskService.setTaskError(1L, "nope")).isFalse();
+            assertThat(taskService.setTaskError(1L, "nope")).isFalse();
+        } finally {
+            logger.detachAppender(appender);
+        }
+
+        verify(taskMapper, never()).compareAndSetFailed(any(), any(), any(), any());
+        verify(taskMapper, never()).updateErrorMessageIfFailed(any(), any());
+        verify(taskMapper, never()).updateById(any(Task.class));
+        verify(eventPublisher, never()).publishEvent(any());
+        assertThat(appender.list).isNotEmpty();
+        assertThat(appender.list).allMatch(event -> event.getLevel() == Level.INFO);
+        assertThat(appender.list).extracting(ILoggingEvent::getFormattedMessage)
+                .anyMatch(message -> message.contains("SUCCESS"))
+                .anyMatch(message -> message.contains("CANCELLED"));
+    }
+
+    @Test
+    @DisplayName("标失败未命中后重读到取消则不再改状态、不发事件")
+    public void shouldNotPublishFailureWhenCancelWins() {
+        Task running = TaskBuilder.aTask().withId(1L).running().build();
+        Task cancelled = TaskBuilder.aTask().withId(1L).cancelled().build();
+        when(taskMapper.selectById(1L)).thenReturn(running, cancelled);
+        when(taskMapper.compareAndSetFailed(eq(1L), eq("RUNNING"), eq("boom"), any(LocalDateTime.class)))
+                .thenReturn(0);
+
+        assertThat(taskService.setTaskError(1L, "boom")).isFalse();
+
+        verify(eventPublisher, never()).publishEvent(any());
+        verify(taskMapper, never()).updateErrorMessageIfFailed(any(), any());
+    }
+
+    @Test
+    @DisplayName("失败信息条件更新未命中后按新状态标失败")
+    public void shouldRetryFailureMessageUpdateWhenStatusMoved() {
+        Task failed = TaskBuilder.aTask().withId(1L).failed().build();
+        Task running = TaskBuilder.aTask().withId(1L).running().build();
+        when(taskMapper.selectById(1L)).thenReturn(failed, running);
+        when(taskMapper.updateErrorMessageIfFailed(1L, "again")).thenReturn(0);
+        when(taskMapper.compareAndSetFailed(eq(1L), eq("RUNNING"), eq("again"), any(LocalDateTime.class)))
+                .thenReturn(1);
+
+        assertThat(taskService.setTaskError(1L, "again")).isTrue();
+
+        verify(eventPublisher).publishEvent(new TaskStatusChangedEvent(1L, "RUNNING", "FAILED"));
+        verify(taskMapper, times(1)).updateErrorMessageIfFailed(1L, "again");
+    }
+
+    @Test
+    @DisplayName("标失败连续三次未命中时返回 false 且不发事件")
+    public void shouldReturnFalseWhenSetTaskErrorLosesThreeTimes() {
+        Task running = TaskBuilder.aTask().withId(1L).running().build();
+        when(taskMapper.selectById(1L)).thenReturn(running);
+        when(taskMapper.compareAndSetFailed(eq(1L), eq("RUNNING"), eq("boom"), any(LocalDateTime.class)))
+                .thenReturn(0);
+
+        assertThat(taskService.setTaskError(1L, "boom")).isFalse();
+
+        verify(taskMapper, times(3)).compareAndSetFailed(any(), any(), any(), any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    @DisplayName("仅 RUNNING 时标失败，命中发事件，未命中不发")
+    public void shouldFailIfRunningOnlyWhenOneRowChanges() {
+        when(taskMapper.compareAndSetFailed(eq(4L), eq("RUNNING"), eq("gone"), any(LocalDateTime.class)))
+                .thenReturn(1);
+
+        assertThat(taskService.failIfRunning(4L, "gone")).isTrue();
+        verify(eventPublisher).publishEvent(new TaskStatusChangedEvent(4L, "RUNNING", "FAILED"));
+
+        when(taskMapper.compareAndSetFailed(eq(5L), eq("RUNNING"), eq("gone"), any(LocalDateTime.class)))
+                .thenReturn(0);
+        assertThat(taskService.failIfRunning(5L, "gone")).isFalse();
+        verify(eventPublisher, never()).publishEvent(new TaskStatusChangedEvent(5L, "RUNNING", "FAILED"));
+
+        assertThat(taskService.failIfRunning(null, "gone")).isFalse();
+        verify(taskMapper, never()).compareAndSetFailed(isNull(), any(), any(), any());
     }
 }

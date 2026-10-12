@@ -98,6 +98,25 @@ public interface TaskMapper extends BaseMapper<Task> {
     int claimQueued(@Param("taskId") Long taskId);
 
     /**
+     * 只有当前状态仍是 expected 时标为 FAILED，并同时写入错误信息和完成时间。
+     * 返回影响行数。
+     */
+    @Update("UPDATE t_task SET status = 'FAILED', error_message = #{errorMessage}, " +
+            "completed_at = #{completedAt,jdbcType=TIMESTAMP} " +
+            "WHERE id = #{taskId} AND status = #{expected}")
+    int compareAndSetFailed(@Param("taskId") Long taskId,
+                            @Param("expected") String expected,
+                            @Param("errorMessage") String errorMessage,
+                            @Param("completedAt") LocalDateTime completedAt);
+
+    /**
+     * 已经是 FAILED 时只改错误信息。状态已经不是 FAILED 时不更新。
+     */
+    @Update("UPDATE t_task SET error_message = #{errorMessage} WHERE id = #{taskId} AND status = 'FAILED'")
+    int updateErrorMessageIfFailed(@Param("taskId") Long taskId,
+                                   @Param("errorMessage") String errorMessage);
+
+    /**
      * 只更新环境 ID，避免把并发改过的状态写回去。
      */
     @Update("UPDATE t_task SET environment_id = #{environmentId,jdbcType=BIGINT} WHERE id = #{taskId}")

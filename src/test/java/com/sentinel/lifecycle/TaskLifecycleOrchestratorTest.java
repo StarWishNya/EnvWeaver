@@ -187,12 +187,14 @@ class TaskLifecycleOrchestratorTest {
         when(environmentProvisioner.provision(task))
                 .thenThrow(new ProvisioningFailedException(
                         ErrorCode.ENVIRONMENT_CREATE_FAILED, "镜像拉取超时: connection reset", 9L));
+        when(taskService.setTaskError(1L, "镜像拉取超时: connection reset")).thenReturn(true);
 
         orchestrator.onTaskCreated(new TaskCreatedEvent(1L));
 
         var order = inOrder(taskService);
         order.verify(taskService).attachEnvironment(1L, 9L);
         order.verify(taskService).setTaskError(1L, "镜像拉取超时: connection reset");
+        verify(taskService, never()).lookupTask(any());
         verify(environmentService, never()).releaseEnvironment(any());
         verify(environmentMapper, never()).update(any(), any());
     }
@@ -224,11 +226,13 @@ class TaskLifecycleOrchestratorTest {
                         ErrorCode.ENVIRONMENT_CREATE_FAILED, "容器未就绪", 9L));
         doThrow(new BusinessException(ErrorCode.TASK_NOT_FOUND))
                 .when(taskService).attachEnvironment(1L, 9L);
+        when(taskService.setTaskError(1L, "容器未就绪")).thenReturn(true);
 
         assertThatCode(() -> orchestrator.onTaskCreated(new TaskCreatedEvent(1L)))
                 .doesNotThrowAnyException();
 
         verify(taskService).setTaskError(1L, "容器未就绪");
+        verify(taskService, never()).lookupTask(any());
         verify(environmentService, never()).releaseEnvironment(any());
     }
 
@@ -244,6 +248,7 @@ class TaskLifecycleOrchestratorTest {
         when(environmentProvisioner.provision(queued))
                 .thenThrow(new ProvisioningFailedException(
                         ErrorCode.ENVIRONMENT_CREATE_FAILED, "容器未就绪", 9L));
+        when(taskService.setTaskError(1L, "容器未就绪")).thenReturn(true);
         when(environmentMapper.update(isNull(), any())).thenReturn(0, 1);
 
         orchestrator.onTaskCreated(new TaskCreatedEvent(1L));
@@ -287,6 +292,52 @@ class TaskLifecycleOrchestratorTest {
         verify(environmentService).releaseEnvironment(9L);
         verify(taskService, never()).attachEnvironment(any(), any());
         verify(taskService, never()).transitionStatus(1L, "QUEUED", "RUNNING");
+        verify(taskService, never()).setTaskError(any(), any());
+    }
+
+    @Test
+    @DisplayName("供给失败时任务已取消则释放新环境，不按失败保留")
+    void shouldReleaseNewEnvironmentWhenProvisionFailsAfterCancel() {
+        Task queued = queuedTask(1L);
+        Task cancelled = queuedTask(1L);
+        cancelled.setStatus("CANCELLED");
+        when(taskService.transitionStatus(1L, "PENDING", "QUEUED")).thenReturn(true);
+        when(taskService.getTaskById(1L)).thenReturn(queued);
+        when(environmentProvisioner.provision(queued))
+                .thenThrow(new ProvisioningFailedException(
+                        ErrorCode.ENVIRONMENT_CREATE_FAILED, "容器未就绪", 9L));
+        when(taskService.setTaskError(1L, "容器未就绪")).thenReturn(false);
+        when(taskService.lookupTask(1L)).thenReturn(cancelled);
+
+        orchestrator.onTaskCreated(new TaskCreatedEvent(1L));
+
+        var order = inOrder(taskService, environmentService);
+        order.verify(taskService).attachEnvironment(1L, 9L);
+        order.verify(taskService).setTaskError(1L, "容器未就绪");
+        order.verify(taskService).lookupTask(1L);
+        order.verify(environmentService).releaseEnvironment(9L);
+        verifyNoInteractions(diagnosisService);
+        verify(environmentMapper, never()).update(any(), any());
+    }
+
+    @Test
+    @DisplayName("供给失败但任务仍不是取消时不释放环境")
+    void shouldNotReleaseWhenProvisionFailureDoesNotLeaveTaskCancelled() {
+        Task queued = queuedTask(1L);
+        when(taskService.transitionStatus(1L, "PENDING", "QUEUED")).thenReturn(true);
+        when(taskService.getTaskById(1L)).thenReturn(queued);
+        when(environmentProvisioner.provision(queued))
+                .thenThrow(new ProvisioningFailedException(
+                        ErrorCode.ENVIRONMENT_CREATE_FAILED, "容器未就绪", 9L));
+        when(taskService.setTaskError(1L, "容器未就绪")).thenReturn(false);
+        when(taskService.lookupTask(1L)).thenReturn(queued);
+
+        orchestrator.onTaskCreated(new TaskCreatedEvent(1L));
+
+        verify(taskService).attachEnvironment(1L, 9L);
+        verify(environmentService, never()).releaseEnvironment(any());
+        verifyNoInteractions(diagnosisService);
+        verify(environmentMapper, never()).update(any(), any());
     }
 
     @Test
@@ -304,6 +355,7 @@ class TaskLifecycleOrchestratorTest {
 
         verify(taskService).attachEnvironment(1L, 9L);
         verify(environmentService).releaseEnvironment(9L);
+        verify(taskService, never()).setTaskError(any(), any());
     }
 
     @Test

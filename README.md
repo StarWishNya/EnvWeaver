@@ -309,7 +309,9 @@ BASE_URL=http://localhost:8080 bash scripts/ai-smoke-test.sh
 4. `SUCCESS` 和取消会立即释放环境。`FAILED` 会先自动请求 AI 诊断（此时容器日志还在），再把环境标为 `RETAINED`，保留 `sentinel.lifecycle.failed-retention`（默认 30 分钟）供排查。环境创建本身失败时，环境保持 `ERROR`，同样在保留期后回收。
 5. 后台每分钟回收已过期的环境（默认存活 `sentinel.provisioning.ttl` 2 小时），并补扫因重启遗漏的 `PENDING` 任务。
 
-后台还按 `sentinel.lifecycle.reconcile.interval`（默认 60 秒，`sentinel.lifecycle.reconcile.enabled` 默认开启）核对 `READY`、`BUSY`、`RETAINED` 环境里记录的容器是否还在。`CREATING` 和 `RELEASING` 不核对；创建或更新时间落在 `sentinel.lifecycle.reconcile.grace`（默认 2 分钟）内的也先跳过，避免供给刚写完就被当成丢失。没有依赖的空环境（`composeContent` 为 `services: {}` 且没有端口映射）本来就没有容器，不改。容器全部不在、只有一部分容器不在，或编排/端口显示本该有容器但一条容器记录都没有时，缺失的容器行标为 `STOPPED`，环境改为 `ERROR`（原因写在 `composeContent` 开头），清空 `portMappings` 和 `resourceUsage`，并把 `expiresAt` 设为当前时间，交给回收器处理还在的容器。条件更新要求状态仍是读到的那个值，并发释放或回收已经改掉状态时不再改任务。关联任务若仍是 `RUNNING`，则走原来的失败状态路径标为 `FAILED`，`errorMessage` 为「环境容器已不存在（可能被手动删除或主机重启）」，失败监听器仍会做自动诊断。环境改为 `ERROR` 后不再占用供给名额，并发布与释放相同的事件，让排队任务出队。Docker 出现容器不存在以外的错误时本轮不改状态，只记一次警告。资源采样写 `resourceUsage` 时不会拨动 `updatedAt`，以免把宽限期无限续上。测试 profile 关闭这项核对。
+`PUT /api/tasks/{taskId}/status` 和 `DELETE /api/tasks/{taskId}` 按刚读到的状态做比较并设置。和另一次状态变更连续冲突三次时返回 HTTP 409，不会覆盖已经写上的状态。已经是 `SUCCESS` 或 `CANCELLED` 的任务不会再被标成 `FAILED`。
+
+后台还按 `sentinel.lifecycle.reconcile.interval`（默认 60 秒，`sentinel.lifecycle.reconcile.enabled` 默认开启）核对 `READY`、`BUSY`、`RETAINED` 环境里记录的容器是否还在。`CREATING` 和 `RELEASING` 不核对；创建或更新时间落在 `sentinel.lifecycle.reconcile.grace`（默认 2 分钟）内的也先跳过，避免供给刚写完就被当成丢失。没有依赖的空环境（`composeContent` 为 `services: {}` 且没有端口映射）本来就没有容器，不改。容器全部不在、只有一部分容器不在，或编排/端口显示本该有容器但一条容器记录都没有时，缺失的容器行标为 `STOPPED`，环境改为 `ERROR`（原因写在 `composeContent` 开头），清空 `portMappings` 和 `resourceUsage`，并把 `expiresAt` 设为当前时间，交给回收器处理还在的容器。条件更新要求状态仍是读到的那个值，并发释放或回收已经改掉状态时不再改任务。关联任务只有当前仍是 `RUNNING` 时才用一条条件更新标为 `FAILED`（已经取消或结束则不覆盖、不发失败事件），`errorMessage` 为「环境容器已不存在（可能被手动删除或主机重启）」，失败监听器仍会做自动诊断。环境改为 `ERROR` 后不再占用供给名额，并发布与释放相同的事件，让排队任务出队。Docker 出现容器不存在以外的错误时本轮不改状态，只记一次警告。资源采样写 `resourceUsage` 时不会拨动 `updatedAt`，以免把宽限期无限续上。测试 profile 关闭这项核对。
 
 `sentinel.lifecycle.auto-provision` 和 `auto-diagnose` 可分别关闭自动供给和失败自动诊断。测试 profile 中两者都关闭。
 

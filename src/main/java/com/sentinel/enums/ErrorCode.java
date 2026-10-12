@@ -26,6 +26,7 @@ public enum ErrorCode {
     TASK_CANCEL_FAILED(2003, "任务取消失败"),
     TASK_STATUS_INVALID(2004, "任务状态无效"),
     TASK_ALREADY_RUNNING(2005, "任务已在运行中"),
+    TASK_STATUS_CONFLICT(2006, "任务状态已被并发修改，请重试"),
 
     // 3xxx - 环境相关错误
     ENVIRONMENT_NOT_FOUND(3001, "环境不存在"),

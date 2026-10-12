@@ -4,7 +4,6 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.sentinel.config.properties.LifecycleProperties;
 import com.sentinel.domain.Container;
 import com.sentinel.domain.Environment;
-import com.sentinel.domain.Task;
 import com.sentinel.event.EnvironmentReleasedEvent;
 import com.sentinel.mapper.ContainerMapper;
 import com.sentinel.mapper.EnvironmentMapper;
@@ -47,7 +46,6 @@ public class EnvironmentReconciler {
 
     private static final String STATUS_ERROR = "ERROR";
     private static final String STATUS_STOPPED = "STOPPED";
-    private static final String TASK_RUNNING = "RUNNING";
 
     private final LifecycleProperties lifecycleProperties;
     private final EnvironmentMapper environmentMapper;
@@ -247,11 +245,7 @@ public class EnvironmentReconciler {
         if (taskId == null) {
             return;
         }
-        Task task = taskService.lookupTask(taskId);
-        if (task == null || !TASK_RUNNING.equals(task.getStatus())) {
-            return;
-        }
-        taskService.setTaskError(taskId, MISSING_REASON);
+        taskService.failIfRunning(taskId, MISSING_REASON);
     }
 
     private boolean warnOnce(boolean warned, Long environmentId, String containerId, RuntimeException ex) {

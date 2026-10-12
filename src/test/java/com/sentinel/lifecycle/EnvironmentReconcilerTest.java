@@ -10,7 +10,6 @@ import com.github.dockerjava.api.exception.DockerException;
 import com.sentinel.config.properties.LifecycleProperties;
 import com.sentinel.domain.Container;
 import com.sentinel.domain.Environment;
-import com.sentinel.domain.Task;
 import com.sentinel.event.EnvironmentReleasedEvent;
 import com.sentinel.mapper.ContainerMapper;
 import com.sentinel.mapper.EnvironmentMapper;
@@ -94,14 +93,12 @@ class EnvironmentReconcilerTest {
         Environment environment = busyEnvironment(8L, 3L, "services:\n  redis:\n    image: redis:7\n");
         Container first = container(21L, 8L, "cid-a");
         Container second = container(22L, 8L, "cid-b");
-        Task running = runningTask(3L);
         when(environmentMapper.selectByStatuses(eq(EnvironmentReconciler.RECONCILE_STATUSES), anyInt()))
                 .thenReturn(List.of(environment));
         when(containerMapper.findByEnvironmentId(8L)).thenReturn(List.of(first, second));
         when(containerLauncher.exists("cid-a")).thenReturn(false);
         when(containerLauncher.exists("cid-b")).thenReturn(false);
         when(environmentMapper.update(isNull(), any())).thenReturn(1);
-        when(taskService.lookupTask(3L)).thenReturn(running);
 
         reconciler.reconcile();
 
@@ -110,8 +107,10 @@ class EnvironmentReconcilerTest {
         var order = inOrder(environmentMapper, containerMapper, taskService, eventPublisher);
         order.verify(environmentMapper).update(isNull(), envUpdate.capture());
         order.verify(containerMapper, times(2)).updateById(stopped.capture());
-        order.verify(taskService).setTaskError(3L, REASON);
+        order.verify(taskService).failIfRunning(3L, REASON);
         order.verify(eventPublisher).publishEvent(new EnvironmentReleasedEvent(8L));
+        verify(taskService, never()).lookupTask(any());
+        verify(taskService, never()).setTaskError(any(), any());
 
         assertMissingEnvironmentUpdate(envUpdate.getValue(), 8L, "BUSY",
                 "# " + REASON + "\nservices:\n  redis:\n    image: redis:7\n");
@@ -135,6 +134,7 @@ class EnvironmentReconcilerTest {
 
         verify(containerLauncher, never()).exists(any());
         verify(environmentMapper, never()).update(any(), any());
+        verify(taskService, never()).failIfRunning(any(), any());
         verify(taskService, never()).setTaskError(any(), any());
         verifyNoInteractions(eventPublisher);
     }
@@ -146,7 +146,6 @@ class EnvironmentReconcilerTest {
         when(environmentMapper.selectByStatuses(any(), anyInt())).thenReturn(List.of(environment));
         when(containerMapper.findByEnvironmentId(4L)).thenReturn(List.of());
         when(environmentMapper.update(isNull(), any())).thenReturn(1);
-        when(taskService.lookupTask(9L)).thenReturn(runningTask(9L));
 
         reconciler.reconcile();
 
@@ -156,7 +155,9 @@ class EnvironmentReconcilerTest {
                 "# " + REASON + "\nservices:\n  redis:\n    image: redis:7\n");
         verify(containerLauncher, never()).exists(any());
         verify(containerMapper, never()).updateById(any(Container.class));
-        verify(taskService).setTaskError(9L, REASON);
+        verify(taskService).failIfRunning(9L, REASON);
+        verify(taskService, never()).lookupTask(any());
+        verify(taskService, never()).setTaskError(any(), any());
         verify(eventPublisher).publishEvent(new EnvironmentReleasedEvent(4L));
     }
 
@@ -173,7 +174,6 @@ class EnvironmentReconcilerTest {
         when(containerLauncher.exists("gone")).thenReturn(false);
         when(containerLauncher.exists("alive")).thenReturn(true);
         when(environmentMapper.update(isNull(), any())).thenReturn(1);
-        when(taskService.lookupTask(2L)).thenReturn(runningTask(2L));
 
         reconciler.reconcile();
 
@@ -186,7 +186,9 @@ class EnvironmentReconcilerTest {
         assertThat(stopped.getValue().getId()).isEqualTo(31L);
         assertThat(stopped.getValue().getStatus()).isEqualTo("STOPPED");
         assertThat(alive.getStatus()).isEqualTo("RUNNING");
-        verify(taskService).setTaskError(2L, REASON);
+        verify(taskService).failIfRunning(2L, REASON);
+        verify(taskService, never()).lookupTask(any());
+        verify(taskService, never()).setTaskError(any(), any());
         verify(eventPublisher).publishEvent(new EnvironmentReleasedEvent(6L));
     }
 
@@ -202,6 +204,7 @@ class EnvironmentReconcilerTest {
 
         verify(environmentMapper, never()).update(any(), any());
         verify(containerMapper, never()).updateById(any(Container.class));
+        verify(taskService, never()).failIfRunning(any(), any());
         verify(taskService, never()).setTaskError(any(), any());
         verifyNoInteractions(eventPublisher);
     }
@@ -230,6 +233,7 @@ class EnvironmentReconcilerTest {
         verify(environmentMapper, never()).update(any(), any());
         verify(containerMapper, never()).updateById(any(Container.class));
         verify(taskService, never()).lookupTask(any());
+        verify(taskService, never()).failIfRunning(any(), any());
         verify(taskService, never()).setTaskError(any(), any());
         verifyNoInteractions(eventPublisher);
         assertThat(appender.list.stream().filter(event -> event.getLevel() == Level.WARN).toList())
@@ -257,14 +261,15 @@ class EnvironmentReconcilerTest {
         when(containerMapper.findByEnvironmentId(3L)).thenReturn(List.of(container(9L, 3L, "cid-due")));
         when(containerLauncher.exists("cid-due")).thenReturn(false);
         when(environmentMapper.update(isNull(), any())).thenReturn(1);
-        when(taskService.lookupTask(3L)).thenReturn(runningTask(3L));
 
         reconciler.reconcile();
 
         verify(containerMapper, never()).findByEnvironmentId(1L);
         verify(containerMapper, never()).findByEnvironmentId(2L);
         verify(containerLauncher).exists("cid-due");
-        verify(taskService).setTaskError(3L, REASON);
+        verify(taskService).failIfRunning(3L, REASON);
+        verify(taskService, never()).lookupTask(any());
+        verify(taskService, never()).setTaskError(any(), any());
         verify(eventPublisher).publishEvent(new EnvironmentReleasedEvent(3L));
     }
 
@@ -283,6 +288,7 @@ class EnvironmentReconcilerTest {
         verify(containerMapper, never()).findByEnvironmentId(any());
         verify(containerLauncher, never()).exists(any());
         verify(environmentMapper, never()).update(any(), any());
+        verify(taskService, never()).failIfRunning(any(), any());
         verify(taskService, never()).setTaskError(any(), any());
         verifyNoInteractions(eventPublisher);
     }
@@ -304,25 +310,25 @@ class EnvironmentReconcilerTest {
         assertThat(((AbstractWrapper<?, ?, ?>) envUpdate.getValue()).getSqlSegment()).contains("status");
         verify(containerMapper, never()).updateById(any(Container.class));
         verify(taskService, never()).lookupTask(any());
+        verify(taskService, never()).failIfRunning(any(), any());
         verify(taskService, never()).setTaskError(any(), any());
         verifyNoInteractions(eventPublisher);
     }
 
     @Test
-    @DisplayName("任务不是 RUNNING 时不改任务，仍然发布释放事件")
-    void shouldPublishReleaseEventWithoutFailingATerminalTask() {
+    @DisplayName("不预读任务状态，直接按 RUNNING 条件标失败，并发布释放事件")
+    void shouldFailIfRunningWithoutReadingTheTask() {
         Environment environment = busyEnvironment(5L, 6L, null);
         environment.setStatus("RETAINED");
-        Task failed = runningTask(6L);
-        failed.setStatus("FAILED");
         when(environmentMapper.selectByStatuses(any(), anyInt())).thenReturn(List.of(environment));
         when(containerMapper.findByEnvironmentId(5L)).thenReturn(List.of(container(50L, 5L, "cid-old")));
         when(containerLauncher.exists("cid-old")).thenReturn(false);
         when(environmentMapper.update(isNull(), any())).thenReturn(1);
-        when(taskService.lookupTask(6L)).thenReturn(failed);
 
         reconciler.reconcile();
 
+        verify(taskService).failIfRunning(6L, REASON);
+        verify(taskService, never()).lookupTask(any());
         verify(taskService, never()).setTaskError(any(), any());
         verify(eventPublisher).publishEvent(new EnvironmentReleasedEvent(5L));
         verify(containerMapper).updateById(any(Container.class));
@@ -378,13 +384,6 @@ class EnvironmentReconcilerTest {
         container.setContainerId(containerId);
         container.setStatus("RUNNING");
         return container;
-    }
-
-    private static Task runningTask(Long id) {
-        Task task = new Task();
-        task.setId(id);
-        task.setStatus("RUNNING");
-        return task;
     }
 
     private static ListAppender<ILoggingEvent> attachWarnAppender() {

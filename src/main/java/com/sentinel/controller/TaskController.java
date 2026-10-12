@@ -141,7 +141,7 @@ public class TaskController {
     }
 
     /**
-     * 取消任务。已结束返回 400，不存在返回 404。
+     * 取消任务。已结束返回 400，并发冲突返回 409，不存在返回 404。
      */
     @DeleteMapping("/{taskId}")
     @Operation(summary = "取消任务", description = "取消指定的任务")

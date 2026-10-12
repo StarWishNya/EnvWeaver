@@ -21,6 +21,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -58,6 +59,9 @@ public class TaskService {
             "UNIT_TEST", "INTEGRATION_TEST", "E2E_TEST");
 
     private static final int DEFAULT_PRIORITY = 5;
+
+    /** 比较并设置未命中时重读再试的次数。三次都未命中则视为并发冲突。 */
+    private static final int STATUS_UPDATE_ATTEMPTS = 3;
 
     private final TaskMapper taskMapper;
     private final DockerService dockerService;
@@ -166,31 +170,37 @@ public class TaskService {
     }
 
     /**
-     * 更新任务状态。状态没变时不写库、也不发事件。
-     * 
+     * 更新任务状态。每次按刚读到的状态做校验，再用比较并设置写入。
+     * 状态没变时不写库、也不发事件。比较并设置未命中则重读，最多三次；
+     * 仍然未命中时抛出业务异常，HTTP 409。
+     *
      * @param taskId 任务 ID
      * @param status 新状态
      */
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public void updateTaskStatus(Long taskId, String status) {
         if (!TASK_STATUSES.contains(status)) {
             throw new BusinessException(ErrorCode.TASK_STATUS_INVALID);
         }
-        Task task = getTaskById(taskId);
-        String oldStatus = task.getStatus();
-        if (Objects.equals(oldStatus, status)) {
-            log.info("任务状态未变化，跳过: taskId={}, status={}", taskId, status);
-            return;
+        for (int attempt = 1; attempt <= STATUS_UPDATE_ATTEMPTS; attempt++) {
+            Task task = getTaskById(taskId);
+            String oldStatus = task.getStatus();
+            if (Objects.equals(oldStatus, status)) {
+                log.info("任务状态未变化，跳过: taskId={}, status={}", taskId, status);
+                return;
+            }
+            if ("QUEUED".equals(oldStatus) && !"CANCELLED".equals(status)) {
+                throw new BusinessException(ErrorCode.OPERATION_NOT_ALLOWED, "排队中的任务只能取消");
+            }
+            if (casStatus(taskId, oldStatus, status)) {
+                eventPublisher.publishEvent(new TaskStatusChangedEvent(taskId, oldStatus, status));
+                log.info("任务状态更新: taskId={}, {} -> {}", taskId, oldStatus, status);
+                return;
+            }
+            log.info("任务状态比较并设置未命中: taskId={}, expected={}, next={}, attempt={}",
+                    taskId, oldStatus, status, attempt);
         }
-        if ("QUEUED".equals(oldStatus) && !"CANCELLED".equals(status)) {
-            throw new BusinessException(ErrorCode.OPERATION_NOT_ALLOWED, "排队中的任务只能取消");
-        }
-        task.setStatus(status);
-        applyStatusTimestamps(task, status);
-        
-        taskMapper.updateById(task);
-        eventPublisher.publishEvent(new TaskStatusChangedEvent(taskId, oldStatus, status));
-        log.info("任务状态更新: taskId={}, {} -> {}", taskId, oldStatus, status);
+        throw statusConflict(taskId);
     }
 
     /**
@@ -309,41 +319,90 @@ public class TaskService {
     }
 
     /**
-     * 取消任务
-     * 
+     * 取消任务。每次重读：已经是终态则拒绝；否则按读到的状态比较并设置为 CANCELLED。
+     * 未命中则重试，最多三次，仍然未命中时 HTTP 409。
+     *
      * @param taskId 任务 ID
      */
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public void cancelTask(Long taskId) {
-        Task task = getTaskById(taskId);
-        
-        if (isTerminal(task.getStatus())) {
-            throw new BusinessException(ErrorCode.OPERATION_NOT_ALLOWED, "任务已完成，无法取消");
+        for (int attempt = 1; attempt <= STATUS_UPDATE_ATTEMPTS; attempt++) {
+            Task task = getTaskById(taskId);
+            String oldStatus = task.getStatus();
+            if (isTerminal(oldStatus)) {
+                throw new BusinessException(ErrorCode.OPERATION_NOT_ALLOWED, "任务已完成，无法取消");
+            }
+            if (casStatus(taskId, oldStatus, "CANCELLED")) {
+                eventPublisher.publishEvent(new TaskStatusChangedEvent(taskId, oldStatus, "CANCELLED"));
+                log.info("任务已取消: taskId={}, {} -> CANCELLED", taskId, oldStatus);
+                return;
+            }
+            log.info("取消任务比较并设置未命中: taskId={}, expected={}, attempt={}", taskId, oldStatus, attempt);
         }
-        
-        updateTaskStatus(taskId, "CANCELLED");
-        log.info("任务已取消: taskId={}", taskId);
+        throw statusConflict(taskId);
     }
 
     /**
-     * 设置任务错误信息。已经是 FAILED 时仍更新错误信息，但不重复发状态事件。
-     * 
+     * 把任务标为失败。SUCCESS 和 CANCELLED 不覆盖。已经是 FAILED 时只更新错误信息，不发事件。
+     * 其它状态按读到的值比较并设置为 FAILED，未命中则重试，最多三次。
+     *
      * @param taskId 任务 ID
      * @param errorMessage 错误信息
+     * @return 本次调用是否把状态改成了 FAILED
      */
-    @Transactional
-    public void setTaskError(Long taskId, String errorMessage) {
-        Task task = getTaskById(taskId);
-        String oldStatus = task.getStatus();
-        task.setErrorMessage(errorMessage);
-        task.setStatus("FAILED");
-        task.setCompletedAt(LocalDateTime.now());
-        
-        taskMapper.updateById(task);
-        if (!"FAILED".equals(oldStatus)) {
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public boolean setTaskError(Long taskId, String errorMessage) {
+        for (int attempt = 1; attempt <= STATUS_UPDATE_ATTEMPTS; attempt++) {
+            Task task = getTaskById(taskId);
+            String oldStatus = task.getStatus();
+            if ("SUCCESS".equals(oldStatus) || "CANCELLED".equals(oldStatus)) {
+                log.info("任务已结束，不改为失败: taskId={}, status={}", taskId, oldStatus);
+                return false;
+            }
+            if ("FAILED".equals(oldStatus)) {
+                int updated = taskMapper.updateErrorMessageIfFailed(taskId, errorMessage);
+                if (updated == 0) {
+                    log.info("失败信息未写入，状态已变化: taskId={}, attempt={}", taskId, attempt);
+                    continue;
+                }
+                log.error("任务执行失败: taskId={}, error={}", taskId, errorMessage);
+                return false;
+            }
+            int updated = taskMapper.compareAndSetFailed(
+                    taskId, oldStatus, errorMessage, LocalDateTime.now());
+            if (updated == 0) {
+                log.info("任务标失败未命中: taskId={}, expected={}, attempt={}", taskId, oldStatus, attempt);
+                continue;
+            }
             eventPublisher.publishEvent(new TaskStatusChangedEvent(taskId, oldStatus, "FAILED"));
+            log.error("任务执行失败: taskId={}, error={}", taskId, errorMessage);
+            return true;
         }
+        log.info("任务标失败连续未命中: taskId={}", taskId);
+        return false;
+    }
+
+    /**
+     * 仅当任务仍是 RUNNING 时标为 FAILED，并写入错误信息和完成时间。
+     * 影响行数不是 1 时不发事件。
+     *
+     * @param taskId 任务 ID
+     * @param errorMessage 错误信息
+     * @return 状态是否从 RUNNING 改成了 FAILED
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public boolean failIfRunning(Long taskId, String errorMessage) {
+        if (taskId == null) {
+            return false;
+        }
+        int updated = taskMapper.compareAndSetFailed(taskId, "RUNNING", errorMessage, LocalDateTime.now());
+        if (updated != 1) {
+            log.info("任务不是 RUNNING，不标失败: taskId={}", taskId);
+            return false;
+        }
+        eventPublisher.publishEvent(new TaskStatusChangedEvent(taskId, "RUNNING", "FAILED"));
         log.error("任务执行失败: taskId={}, error={}", taskId, errorMessage);
+        return true;
     }
 
     /**
@@ -464,12 +523,19 @@ public class TaskService {
         return dockerService.getContainerLogs(containerId, tail, sinceTime.toInstant());
     }
 
-    private static void applyStatusTimestamps(Task task, String status) {
-        if ("RUNNING".equals(status)) {
-            task.setStartedAt(LocalDateTime.now());
-        } else if (isTerminal(status)) {
-            task.setCompletedAt(LocalDateTime.now());
-        }
+    /**
+     * 按目标状态写入与原先 applyStatusTimestamps 相同的时间：进入 RUNNING 写 startedAt，进入终态写 completedAt。
+     * 只在当前状态仍是 expected 时更新。
+     */
+    private boolean casStatus(Long taskId, String expected, String next) {
+        LocalDateTime startedAt = "RUNNING".equals(next) ? LocalDateTime.now() : null;
+        LocalDateTime completedAt = isTerminal(next) ? LocalDateTime.now() : null;
+        return taskMapper.compareAndSetStatus(taskId, expected, next, startedAt, completedAt) == 1;
+    }
+
+    private BusinessException statusConflict(Long taskId) {
+        log.info("任务状态连续冲突: taskId={}", taskId);
+        return new BusinessException(ErrorCode.TASK_STATUS_CONFLICT);
     }
 
     private static boolean isTerminal(String status) {

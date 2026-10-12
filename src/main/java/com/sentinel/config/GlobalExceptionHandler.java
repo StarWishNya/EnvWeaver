@@ -144,7 +144,8 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * 处理业务异常。HTTP 状态按错误码映射：认证失败 401，权限不足 403，资源不存在 404，Docker 错误 503，其余 400。
+     * 处理业务异常。HTTP 状态按错误码映射：认证失败 401，权限不足 403，资源不存在 404，
+     * Docker 错误 503，任务状态并发冲突 409，其余 400。
      */
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<ApiResponse<Object>> handleBusinessException(BusinessException ex) {
@@ -174,6 +175,9 @@ public class GlobalExceptionHandler {
         }
         if (code.equals(ErrorCode.DOCKER_ERROR.getCode())) {
             return HttpStatus.SERVICE_UNAVAILABLE;
+        }
+        if (code.equals(ErrorCode.TASK_STATUS_CONFLICT.getCode())) {
+            return HttpStatus.CONFLICT;
         }
         return HttpStatus.BAD_REQUEST;
     }

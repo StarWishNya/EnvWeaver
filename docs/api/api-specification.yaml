@@ -11,6 +11,7 @@ info:
     - 1008：403
     - 2001、3001、4002、5005：404
     - 5003：503
+    - 2006：409
     - 其余业务码：400
 
     未捕获异常：HTTP 500，`code` 5000，`message` 为「系统错误」。
@@ -36,6 +37,7 @@ info:
     - 2003 任务取消失败
     - 2004 任务状态无效
     - 2005 任务已在运行中
+    - 2006 任务状态已被并发修改，请重试
     - 3001 环境不存在
     - 3002 环境创建失败
     - 3003 环境释放失败
@@ -131,7 +133,7 @@ components:
     BadRequest:
       description: |
         HTTP 400。方法参数校验失败时 code=5004，data 为字段错误映射。
-        业务异常（除 401/403/404/503 映射外）同样是 HTTP 400，data 为 null。
+        业务异常（除 401/403/404/409/503 映射外）同样是 HTTP 400，data 为 null。
       content:
         application/json:
           schema:
@@ -152,6 +154,14 @@ components:
             $ref: '#/components/schemas/ApiResponse'
     ServiceUnavailable:
       description: Docker 业务错误。HTTP 503，code=5003。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'
+    Conflict:
+      description: |
+        任务状态被并发修改，比较并设置连续未命中。HTTP 409，code=2006，
+        message 为「任务状态已被并发修改，请重试」。
       content:
         application/json:
           schema:
@@ -1128,7 +1138,10 @@ paths:
     delete:
       tags: [Task]
       summary: 取消任务
-      description: 取消指定任务。成功时 message 为「任务已取消」，data 为 null。已是 SUCCESS、FAILED 或 CANCELLED 时 HTTP 400，code 5007。不存在时 HTTP 404，code 2001。
+      description: |
+        取消指定任务。成功时 message 为「任务已取消」，data 为 null。
+        已是 SUCCESS、FAILED 或 CANCELLED 时 HTTP 400，code 5007。不存在时 HTTP 404，code 2001。
+        与并发状态变更冲突、比较并设置连续三次未命中时 HTTP 409，code 2006。
       operationId: deleteTask
       parameters:
         - $ref: '#/components/parameters/TaskId'
@@ -1154,6 +1167,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
 
   /api/tasks/{taskId}/status:
     get:
@@ -1187,6 +1202,7 @@ paths:
         仅管理员（角色 ADMIN）。新状态必须是任务状态枚举，区分大小写。
         状态未变化时不写库。成功时 message 为「任务状态已更新」，data 为 null。
         非法状态 HTTP 400，code 2004。非管理员 HTTP 403，code 1008。任务不存在 HTTP 404，code 2001。
+        与并发状态变更冲突、比较并设置连续三次未命中时 HTTP 409，code 2006。
       operationId: updateTaskStatus
       parameters:
         - $ref: '#/components/parameters/TaskId'
@@ -1220,6 +1236,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
 
   /api/tasks/{taskId}/logs:
     get:

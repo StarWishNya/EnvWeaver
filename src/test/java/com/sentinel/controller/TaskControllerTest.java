@@ -283,6 +283,19 @@ public class TaskControllerTest {
 
     @Test
     @WithMockUser
+    @DisplayName("DELETE 取消与并发状态变更冲突时返回 409")
+    public void shouldReturnConflictWhenDeleteLosesRace() throws Exception {
+        doThrow(new BusinessException(ErrorCode.TASK_STATUS_CONFLICT))
+                .when(taskService).cancelTask(3L);
+
+        mockMvc.perform(delete("/api/tasks/{taskId}", 3L).with(csrf()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value(2006))
+                .andExpect(jsonPath("$.message").value("任务状态已被并发修改，请重试"));
+    }
+
+    @Test
+    @WithMockUser
     @DisplayName("测试取消任务失败 - 任务已完成")
     public void shouldReturnError_whenCancelCompletedTask() throws Exception {
         // Given
@@ -317,6 +330,21 @@ public class TaskControllerTest {
                 .andExpect(jsonPath("$.message").value("任务状态已更新"));
 
         verify(taskService, times(1)).updateTaskStatus(taskId, newStatus);
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    @DisplayName("更新状态与并发修改冲突时返回 409")
+    public void shouldReturnConflictWhenStatusUpdateLosesRace() throws Exception {
+        doThrow(new BusinessException(ErrorCode.TASK_STATUS_CONFLICT))
+                .when(taskService).updateTaskStatus(8L, "SUCCESS");
+
+        mockMvc.perform(put("/api/tasks/{taskId}/status", 8L)
+                        .with(csrf())
+                        .param("status", "SUCCESS"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value(2006))
+                .andExpect(jsonPath("$.message").value("任务状态已被并发修改，请重试"));
     }
 
     @Test

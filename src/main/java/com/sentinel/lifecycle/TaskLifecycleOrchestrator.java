@@ -195,6 +195,7 @@ public class TaskLifecycleOrchestrator {
      * 容量够且没有更高优先级的排队任务时，比较并设置 PENDING→QUEUED 再供给。
      * 否则写成带 queuedAt 的 QUEUED，不创建环境。供给期间被取消时释放新环境。
      * 供给失败但异常带了环境编号时，先绑定再标失败，不立刻释放。环境保持 ERROR。
+     * 若标失败没有把任务改成 FAILED，且任务已经是 CANCELLED，则释放刚创建的环境，不按失败保留。
      */
     void provisionTask(Long taskId) {
         if (!lifecycleProperties.isAutoProvision()) {
@@ -248,10 +249,13 @@ public class TaskLifecycleOrchestrator {
             environment = environmentProvisioner.provision(task);
         } catch (ProvisioningFailedException ex) {
             // 环境行已经落库。先绑定再标失败。FAILED 事件不把 ERROR 改成 RETAINED，只缩短过期时间。
+            // 任务在供给期间被取消时 setTaskError 不会改成 FAILED，这里改为释放，避免按失败保留。
             log.warn("环境供给失败: taskId={}, envId={}, reason={}",
                     taskId, ex.getEnvironmentId(), ex.getMessage());
             attachFailedEnvironment(taskId, ex.getEnvironmentId());
-            markTaskFailed(taskId, shortReason(ex));
+            if (!markTaskFailed(taskId, shortReason(ex))) {
+                releaseIfCancelled(taskId, ex.getEnvironmentId());
+            }
             return;
         } catch (RuntimeException ex) {
             logProvisionFailure(taskId, ex);
@@ -520,12 +524,31 @@ public class TaskLifecycleOrchestrator {
         }
     }
 
-    private void markTaskFailed(Long taskId, String reason) {
+    /**
+     * @return 任务状态是否因此变成 FAILED
+     */
+    private boolean markTaskFailed(Long taskId, String reason) {
         try {
-            taskService.setTaskError(taskId, reason);
+            return taskService.setTaskError(taskId, reason);
         } catch (RuntimeException ex) {
             log.warn("写入任务失败状态失败: taskId={}, reason={}", taskId, ex.getMessage());
+            return false;
         }
+    }
+
+    /**
+     * 供给失败发生时用户已经取消：不把环境留作失败现场。
+     */
+    private void releaseIfCancelled(Long taskId, Long environmentId) {
+        if (environmentId == null) {
+            return;
+        }
+        Task current = taskService.lookupTask(taskId);
+        if (current == null || !"CANCELLED".equals(current.getStatus())) {
+            return;
+        }
+        log.info("供给失败时任务已取消，释放环境且不按失败保留: taskId={}, envId={}", taskId, environmentId);
+        releaseQuietly(environmentId);
     }
 
     private void submit(Runnable work) {
