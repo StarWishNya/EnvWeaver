@@ -351,3 +351,210 @@ Not implemented. Do not paste these twelve logs into the prompt and score them a
 3. For readiness and similar mixed logs, state the winner: probe deadline means TIMEOUT even when the body is 503, or a 503 from a named component means DEPENDENCY_FAILURE even when the probe times out. Until that sentence exists, score both and do not treat the flip as a regression.
 4. Split the resource sentences. Type: file descriptors and a rejected pool are RESOURCE_EXHAUSTED. Severity: CRITICAL stays memory and disk only; EMFILE and `RejectedExecutionException` on a live request are HIGH. The type rule currently lists 文件句柄 in the same breath as heap and disk, which is why one run marked EMFILE CRITICAL.
 5. Keep reporting primary and acceptable separately. 24/24 with alternates counted is a taxonomy-fit number. 17/24 is the exact-label number comparable to the tuned 28/28.
+
+## Taxonomy decisions (2026-10-12)
+
+Recorded 2026-10-12 16:31:15 CST, before any case relabel or prompt edit. Product-owner boundaries, applied as written. They close recommendations 1–4. Recommendation 5 (report primary and acceptable separately) stays a scoring rule, not a label change.
+
+- TLS/SSL trust failures — `PKIX path building failed`, `unable to find valid certification path`, certificate expired, hostname mismatch, and `SSLHandshakeException` caused by those — are `CONFIG_ERROR`, severity `HIGH`.
+- Filesystem permission errors — `java.nio.file.AccessDeniedException`, and `Permission denied` when opening or writing a file or directory — are `CONFIG_ERROR`, severity `HIGH`. Network `Permission denied` when binding a privileged port stays `NETWORK_ERROR`.
+- A downstream that is reachable and answers `2xx` with an unusable body (JSON parse or mapping error such as `UnrecognizedPropertyException`, `MismatchedInputException`, or `JsonParseException` on that response) is `DEPENDENCY_FAILURE`. A JSON error on our own request input or on a config file is not covered by this rule.
+- A probe or health-check deadline exceeded is `TIMEOUT` even when a `503` body is also logged. A `503` with no deadline in the log stays `DEPENDENCY_FAILURE`.
+- File-descriptor exhaustion (`Too many open files`, `EMFILE`) and thread-pool rejection (`RejectedExecutionException`) are `RESOURCE_EXHAUSTED`. Severity `CRITICAL` is only for memory and disk exhaustion. `EMFILE` and rejected executions are `HIGH`.
+
+### Relabeled cases
+
+Done 2026-10-12 16:31 CST, before `holdout2` was written and before the prompt changed. The 14 tuning cases already match these decisions, so none of them were relabeled. `too-many-open-files` and `thread-pool-rejected` were already `RESOURCE_EXHAUSTED` / `HIGH`. Four hold-out cases had an expected label the decisions contradict. Severity was already `HIGH` on all four and did not change.
+
+| case | old expected | new expected |
+| --- | --- | --- |
+| ssl-pkix-path | errorType `UNKNOWN`; acceptable `UNKNOWN`, `CONFIG_ERROR`, `NETWORK_ERROR` | errorType `CONFIG_ERROR`; no acceptable list |
+| file-permission-denied | errorType `UNKNOWN`; acceptable `UNKNOWN`, `CONFIG_ERROR` | errorType `CONFIG_ERROR`; no acceptable list |
+| json-downstream-body | errorType `DEPENDENCY_FAILURE`; acceptable `DEPENDENCY_FAILURE`, `UNKNOWN` | errorType `DEPENDENCY_FAILURE`; no acceptable list. Primary was already the decided type; `UNKNOWN` contradicted the 2xx-body rule |
+| readiness-probe | errorType `TIMEOUT`; acceptable `TIMEOUT`, `DEPENDENCY_FAILURE` | errorType `TIMEOUT`; no acceptable list. Primary was already the decided type; `DEPENDENCY_FAILURE` contradicted the probe-deadline rule |
+
+Liquibase checksum, gRPC `UNAVAILABLE` with `Connection refused`, MySQL deadlock, and the jar `NoSuchMethodError` were left as they were. Those disagreements are outside the five decisions.
+
+### holdout2 sha256 (before any model call)
+
+Written 2026-10-12 16:35:12 CST. Twelve new cases in `src/test/resources/ai-eval/holdout2`. Labels come from the taxonomy plus the decisions above. These files are frozen from this point; the prompt was not changed yet, and the model has not been run on this directory.
+
+| file | sha256 |
+| --- | --- |
+| `01-tls-cert-expired.json` | `ac002c3fcabbb9781dc082effafe89c1a0ecfa49f23d37a6e46b4d4508bdaa36` |
+| `02-tls-hostname-mismatch.json` | `7998c057ae0863fca61d915540adecdc75ba65526a2676a3bd456e869586e96b` |
+| `03-spool-permission-denied.json` | `3d7e53ee08016e91a5d9723b0854720f4758f2d51483033a61e77aea70f0e016` |
+| `04-secret-dir-permission.json` | `6571adec54be90b3b2dd4e449313c90eaec9a954d9fc1af7449386a1b59b909e` |
+| `05-downstream-mismatched-input.json` | `f3cffa4808b935c96357dc9355ae76158d7b91e4d9bd5e7080d87e46fefe88e1` |
+| `06-downstream-json-parse.json` | `21142024db4067970567744f5ce8817cc393e1d9826dabcb58564d493f09659c` |
+| `07-startup-probe-deadline.json` | `6378a6216155e94f4034ac5d94554539b1fd52d6ad6a928bb4363406d38bc8ef` |
+| `08-emfile-outbound-socket.json` | `22d7af830945ea85efdb0a4318e8d2199883eed72f2aeca927a1046d0cb6f07e` |
+| `09-dns-name-not-known.json` | `30cd5e7f1b3e83d0dcc0354e814c67ca80473fcbd2338830a5710279117a0ed3` |
+| `10-batch-gc-overhead.json` | `3e1131e2af379f6d0098a134f1dc81f25bf0cc532b95f97e5559f510e1990acc` |
+| `11-missing-webhook-secret.json` | `5e19e95bbce6756006e5c3fd927ac620259e377261c53e407c1a61c69dd24de7` |
+| `12-assertion-on-hand.json` | `c8cbcdd60d933cc74b10660cc8ebda46787a460236a68dad42da535beec05402` |
+
+## Prompt change and final evaluation (2026-10-12)
+
+### Prompt
+
+One iteration. Only `DiagnosisService.SYSTEM_PROMPT` changed. The parser is the same code as before this task.
+
+The ordered rules now state the five decisions:
+
+- `TIMEOUT` includes `deadline exceeded`. A probe or health check that says the deadline was reached is `TIMEOUT` even when the same log contains HTTP 503. A 503 with no deadline is not `TIMEOUT`. An automated test timeout stays `TIMEOUT` at `MEDIUM`.
+- `RESOURCE_EXHAUSTED` names four resources: memory (`OutOfMemoryError`, `Java heap space`), disk (`No space left on device`), file descriptors (`Too many open files`, `EMFILE`), and thread-pool rejection (`RejectedExecutionException`). Severity is split in that same rule and again in the severity block: `CRITICAL` is only memory and disk. `EMFILE` and `RejectedExecutionException` are `HIGH`.
+- `CONFIG_ERROR` adds TLS/SSL trust failure (`PKIX path building failed`, `unable to find valid certification path`, `certificate expired`, `hostname mismatch`, and `SSLHandshakeException` caused by those) and filesystem permission failure (`java.nio.file.AccessDeniedException`, or `Permission denied` while opening or writing a file or directory). `Permission denied` while binding a port stays out of this type.
+- `NETWORK_ERROR` keeps name resolution, connection refused, and port bind, including a privileged-port `Permission denied`. Certificate path, expiry, and hostname mismatch are stated as outside this type. A deepest `Connection refused` or DNS failure stays `NETWORK_ERROR`.
+- `DEPENDENCY_FAILURE` adds a reachable downstream that returns 2xx and then fails JSON parse or mapping (`UnrecognizedPropertyException`, `MismatchedInputException`, `JsonParseException`). A JSON error on our own request body or a local config file is excluded. HTTP 503 with no deadline stays `DEPENDENCY_FAILURE`.
+
+The prompt has no sample id and no log file name. `DiagnosisPromptTuningTest.systemPromptDefinesTaxonomyWithoutCases` locks the decision phrases and rejects sample tokens (`oom-heap`, `InvoiceCalculator`, `HikariPool`, `KafkaProducer`).
+
+Prompt text hash (sha256 prefix of the string stored in the run JSON): baseline `9f732c4199d510a8`, iteration 1 and final `6065698673222cb0`.
+
+### Timestamps
+
+| step | CST |
+| --- | --- |
+| Baseline cases, current prompt before the edit | run 1 `2026-10-12 16:36:30`, run 2 `16:36:57` |
+| Baseline holdout | run 1 `16:39:09`, run 2 `16:39:33` |
+| Baseline holdout2 | run 1 `16:40:19`, run 2 `16:40:44` |
+| Iteration 1 cases (same text as the final prompt) | run 1 `16:43:13`, run 2 `16:43:39`. Primary 14/14 both runs |
+| Iteration 1 holdout re-run after deleting the interrupted directory that contained only `console.log` | wall clock `16:46:20`–`16:47:16`. Console type cell `Y` on all 12 rows, both runs |
+| Prompt frozen | `16:47:16`. No second edit |
+| Final cases | run 1 `16:48:23`, run 2 `16:48:49`. Maven `BUILD SUCCESS` `16:48:50` |
+| Final holdout | run 1 `16:49:21`, run 2 `16:49:48` |
+| Final holdout2 | run 1 `16:50:17`, run 2 `16:50:41`. Surefire for that invocation: tests=1, failures=0, errors=0, skipped=0, time 47.605 s |
+| Default unit tests | `mvn -B -o test` finished `16:53:31` |
+
+Every live call used `AI_PROVIDER_ORDER=deepseek,ollama` from `scripts/ai-eval.sh`. Every scored row is `deepseek` / `deepseek-flash`. Ollama was configured and unused. `AI_EVAL_REWRITE_REPORT=false`. Separate `AI_EVAL_RUNS_DIR` per set.
+
+Latency below is the arithmetic mean of per-case `latencyMs`, rounded to 0.1 ms.
+
+`errorType` exact-primary counts `primaryTypeMatch`. `errorType` counting acceptable counts `typeMatch` (primary or a listed alternate). Recommendation 5: the two columns are always both shown.
+
+### Headline: holdout2, final prompt
+
+`src/test/resources/ai-eval/holdout2` was not edited after the sha256 table above. Re-hash on 2026-10-12 after the final runs: all 12 files still match.
+
+No holdout2 case has an `acceptable` list, so the two errorType columns are the same count.
+
+| metric | base run 1 | base run 2 | base total | final run 1 | final run 2 | final total |
+| --- | --- | --- | --- | --- | --- | --- |
+| errorType, exact primary | 7/12 | 8/12 | 15/24 | 12/12 | 12/12 | 24/24 |
+| errorType, counting acceptable | 7/12 | 8/12 | 15/24 | 12/12 | 12/12 | 24/24 |
+| severity | 12/12 | 12/12 | 24/24 | 12/12 | 12/12 | 24/24 |
+| keyword | 12/12 | 12/12 | 24/24 | 12/12 | 12/12 | 24/24 |
+| parse | 12/12 | 12/12 | 24/24 | 12/12 | 12/12 | 24/24 |
+| mean latency ms | 1935.5 | 2069.2 | 2002.4 | 1916.9 | 1957.6 | 1937.2 |
+
+Final holdout2 has no miss on type, severity, keyword, or parse.
+
+### cases
+
+No tuning case was relabeled. None of the 14 has an `acceptable` list, so the two errorType columns match by construction.
+
+| metric | base run 1 | base run 2 | base total | final run 1 | final run 2 | final total |
+| --- | --- | --- | --- | --- | --- | --- |
+| errorType, exact primary | 14/14 | 14/14 | 28/28 | 14/14 | 14/14 | 28/28 |
+| errorType, counting acceptable | 14/14 | 14/14 | 28/28 | 14/14 | 14/14 | 28/28 |
+| severity | 14/14 | 14/14 | 28/28 | 14/14 | 14/14 | 28/28 |
+| keyword | 14/14 | 14/14 | 28/28 | 14/14 | 14/14 | 28/28 |
+| parse | 14/14 | 14/14 | 28/28 | 14/14 | 14/14 | 28/28 |
+| mean latency ms | 1946.7 | 1903.1 | 1924.9 | 1864.9 | 1864.8 | 1864.9 |
+
+Relabel contribution on this set: 0 calls. Prompt contribution on every accuracy column: 0 calls (28/28 under both prompts). Mean latency 1924.9 ms to 1864.9 ms.
+
+### holdout
+
+Scored here against the post-decision labels (the labels in the JSON). Four cases still have an acceptable list: `liquibase-checksum`, `grpc-unavailable`, `mysql-deadlock`, `jar-method-conflict`. In both baseline runs and both final runs every type hit was the primary label, so the acceptable column equals the primary column in this table. Those four alternates were not used.
+
+| metric | base run 1 | base run 2 | base total | final run 1 | final run 2 | final total |
+| --- | --- | --- | --- | --- | --- | --- |
+| errorType, exact primary | 9/12 | 9/12 | 18/24 | 12/12 | 12/12 | 24/24 |
+| errorType, counting acceptable | 9/12 | 9/12 | 18/24 | 12/12 | 12/12 | 24/24 |
+| severity | 12/12 | 12/12 | 24/24 | 12/12 | 12/12 | 24/24 |
+| keyword | 12/12 | 12/12 | 24/24 | 12/12 | 12/12 | 24/24 |
+| parse | 12/12 | 12/12 | 24/24 | 12/12 | 12/12 | 24/24 |
+| mean latency ms | 2113.2 | 2023.9 | 2068.5 | 2094.6 | 2202.4 | 2148.5 |
+
+### Relabel versus prompt
+
+The baseline rows above already use the new labels. The same baseline holdout outputs, scored again with the pre-decision labels, separate the relabel from the prompt.
+
+Pre-decision labels for the four edited cases: `ssl-pkix-path` primary `UNKNOWN` with acceptable `UNKNOWN`, `CONFIG_ERROR`, `NETWORK_ERROR`; `file-permission-denied` primary `UNKNOWN` with acceptable `UNKNOWN`, `CONFIG_ERROR`; `json-downstream-body` primary `DEPENDENCY_FAILURE` with acceptable `DEPENDENCY_FAILURE`, `UNKNOWN`; `readiness-probe` primary `TIMEOUT` with acceptable `TIMEOUT`, `DEPENDENCY_FAILURE`. The other eight holdout cases are unchanged. No tuning case changed, so the cases table needs no second scoring.
+
+| holdout, baseline outputs | exact primary | counting acceptable |
+| --- | --- | --- |
+| run 1, pre-decision labels | 8/12 | 11/12 |
+| run 2, pre-decision labels | 8/12 | 12/12 |
+| both runs, pre-decision labels | 16/24 | 23/24 |
+| run 1, post-decision labels | 9/12 | 9/12 |
+| run 2, post-decision labels | 9/12 | 9/12 |
+| both runs, post-decision labels | 18/24 | 18/24 |
+| both runs, final prompt, post-decision labels | 24/24 | 24/24 |
+
+Relabel, same model outputs: exact primary 16/24 to 18/24. Both gains are `file-permission-denied` (run 1 and run 2). The old prompt already returned `CONFIG_ERROR`, which was an acceptable alternate and is now the primary. Counting acceptable moved 23/24 to 18/24 because five alternates were removed and the old prompt had used them: `json-downstream-body` `UNKNOWN` on both runs, `readiness-probe` `DEPENDENCY_FAILURE` on both runs, `ssl-pkix-path` `NETWORK_ERROR` on run 2. Run 1 of `ssl-pkix-path` was `DEPENDENCY_FAILURE`, a miss under both label sets.
+
+Prompt, post-decision labels held fixed: exact primary 18/24 to 24/24, and the acceptable count 18/24 to 24/24. The six gains are both runs of `ssl-pkix-path`, `json-downstream-body`, and `readiness-probe`.
+
+| case | baseline run 1 | baseline run 2 | final, both runs |
+| --- | --- | --- | --- |
+| ssl-pkix-path | `DEPENDENCY_FAILURE` | `NETWORK_ERROR` | `CONFIG_ERROR` |
+| json-downstream-body | `UNKNOWN` | `UNKNOWN` | `DEPENDENCY_FAILURE` |
+| readiness-probe | `DEPENDENCY_FAILURE` | `DEPENDENCY_FAILURE` | `TIMEOUT` |
+| file-permission-denied | `CONFIG_ERROR` | `CONFIG_ERROR` | `CONFIG_ERROR` |
+
+Severity, keyword, and parse on holdout were 24/24 under the baseline prompt and stayed 24/24. `too-many-open-files` was `HIGH` on both baseline runs and both final runs.
+
+Holdout2 was written with the post-decision labels, so it has no relabel delta. The prompt delta on that set is exact primary 15/24 to 24/24. Baseline misses, old prompt:
+
+| case | run 1 actual | run 2 actual | expected |
+| --- | --- | --- | --- |
+| tls-cert-expired | `UNKNOWN` | `DEPENDENCY_FAILURE` | `CONFIG_ERROR` |
+| tls-hostname-mismatch | `NETWORK_ERROR` | `NETWORK_ERROR` | `CONFIG_ERROR` |
+| spool-permission-denied | `UNKNOWN` | `CONFIG_ERROR` | `CONFIG_ERROR` |
+| secret-dir-permission | `UNKNOWN` | `UNKNOWN` | `CONFIG_ERROR` |
+| downstream-mismatched-input | `UNKNOWN` | `UNKNOWN` | `DEPENDENCY_FAILURE` |
+
+The other seven holdout2 cases were primary matches on both baseline runs. Severity was already 24/24, including `emfile-outbound-socket` at `HIGH` and `batch-gc-overhead` at `CRITICAL`.
+
+### Cases still wrong on the final runs
+
+None. Across final cases (28 rows), final holdout (24 rows), and final holdout2 (24 rows), every row matched exact primary errorType, severity, keyword, and parse.
+
+### Checks
+
+- `mvn -B -o test` (default surefire, groups `live` and `ai-eval` excluded): exit 0. Surefire `*.txt` reports written by that run: 63 classes, 583 tests, 0 failures, 0 errors, 0 skipped. `TEST-com.sentinel.ai.eval.AiDiagnosisEvalTest.xml` was left by the earlier profile run at 16:50:41 and was not part of that txt total.
+- Live numbers come from `scripts/ai-eval.sh` with `AI_PROVIDER_ORDER=deepseek,ollama`. Provider on every scored row: `deepseek` / `deepseek-flash`.
+- Search for `sk-` followed by 8 or more token characters in `reports/` and in `target/surefire-reports`: no match. `.env` was loaded by the shell script and not printed.
+- holdout2 sha256 values match the table recorded before step 4.
+
+### Files
+
+Modified:
+
+- `src/main/java/com/sentinel/service/DiagnosisService.java` (system prompt only)
+- `src/test/java/com/sentinel/service/DiagnosisPromptTuningTest.java` (prompt phrases)
+- `src/test/java/com/sentinel/ai/eval/AiEvalOfflineTest.java` (relabeled holdout expectations, holdout2 label test)
+- `src/test/resources/ai-eval/holdout/02-ssl-pkix-path.json`
+- `src/test/resources/ai-eval/holdout/08-json-downstream-body.json`
+- `src/test/resources/ai-eval/holdout/09-readiness-probe.json`
+- `src/test/resources/ai-eval/holdout/12-file-permission-denied.json`
+- `reports/ai-diagnosis-eval.md`
+
+Added:
+
+- `src/test/resources/ai-eval/holdout2/` (12 cases)
+- `reports/ai-eval-runs-baseline-cases/`
+- `reports/ai-eval-runs-baseline-holdout/`
+- `reports/ai-eval-runs-baseline-holdout2/`
+- `reports/ai-eval-runs-iter1-cases/`
+- `reports/ai-eval-runs-iter1-holdout/`
+- `reports/ai-eval-runs-final-cases/`
+- `reports/ai-eval-runs-final-holdout/`
+- `reports/ai-eval-runs-final-holdout2/`
+
+### Left undone
+
+Nothing in steps 1–8. No git commit. No parser change, so no new parser test.

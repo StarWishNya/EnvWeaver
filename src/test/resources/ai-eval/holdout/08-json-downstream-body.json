@@ -5,11 +5,6 @@
   "expected": {
     "errorType": "DEPENDENCY_FAILURE",
     "severity": "HIGH",
-    "acceptable": [
-      "DEPENDENCY_FAILURE",
-      "UNKNOWN"
-    ],
-    "labelNote": "The identity service was reached and returned HTTP 200 with a JSON body the client cannot bind (Unrecognized field display_name). That is not a timeout, resource limit, credential error, or connect/bind failure. DEPENDENCY_FAILURE fits because a connected downstream returned a body this client cannot use, even though the HTTP status is 200 rather than 5xx. UNKNOWN is acceptable because the mismatch can equally be a client model that was not updated, which is an application defect.",
     "rootCauseKeywords": [
       "UnrecognizedProperty",
       "display_name",

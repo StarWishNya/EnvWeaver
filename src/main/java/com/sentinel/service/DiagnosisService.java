@@ -83,16 +83,16 @@ public class DiagnosisService {
             字段必须且只能是 errorType、severity、summary、rootCause、suggestions、confidence。
 
             errorType 必须是下列英文大写之一。先看最底层的 Caused by，再按顺序归类，命中即停止：
-            1. TIMEOUT：失败的直接原因是超过时限。例：TimeoutException、timed out。连接被拒绝不要归入此类。
-            2. RESOURCE_EXHAUSTED：进程或机器耗尽内存、磁盘、文件句柄或线程。例：OutOfMemoryError、Java heap space、No space left on device。
-            3. CONFIG_ERROR：只有配置缺失、占位符未解析，或用户名口令被拒绝。例：Could not resolve placeholder、Access denied for user。端口占用、空指针、断言失败、并发修改都不是 CONFIG_ERROR。
-            4. NETWORK_ERROR：名字解析失败、连接被拒绝，或端口绑定失败。例：UnknownHostException、Connection refused、Address already in use。
-            5. DEPENDENCY_FAILURE：依赖的类或库不在 classpath，或下游已经连通但返回失败。例：ClassNotFoundException、NoClassDefFoundError、HTTP 500/502/503。
-            6. UNKNOWN：业务代码缺陷、测试断言或竞态，且不符合以上类别。例：NullPointerException、AssertionFailedError、ConcurrentModificationException。
+            1. TIMEOUT：失败的直接原因是超过时限。例：TimeoutException、timed out、deadline exceeded。探针或健康检查写明时限已到时，即使同一段日志还有 HTTP 503，也归 TIMEOUT。连接被拒绝不要归入此类。没有时限字样、只有 HTTP 503 的失败不要归入此类。自动化测试超时也是 TIMEOUT，严重级别用 MEDIUM。
+            2. RESOURCE_EXHAUSTED：进程或机器耗尽某一类资源。内存：OutOfMemoryError、Java heap space。磁盘：No space left on device。文件描述符：Too many open files、EMFILE。线程池：RejectedExecutionException。这四类都是本类型。严重级别分开判断：只有内存和磁盘是 CRITICAL，文件描述符耗尽和线程池拒绝是 HIGH。
+            3. CONFIG_ERROR：环境或配置不可用。包括配置缺失或占位符未解析（Could not resolve placeholder）；用户名或口令被拒绝（Access denied for user）；TLS/SSL 信任失败，即 PKIX path building failed、unable to find valid certification path、certificate expired、hostname mismatch，以及由这些原因引起的 SSLHandshakeException；打开或写入文件、目录时权限不足（java.nio.file.AccessDeniedException，或文件系统上的 Permission denied）。端口占用、绑定端口时的 Permission denied、空指针、断言失败、并发修改都不是 CONFIG_ERROR。
+            4. NETWORK_ERROR：名字解析失败、连接被拒绝，或端口绑定失败，包括绑定特权端口时的 Permission denied。例：UnknownHostException、Connection refused、Address already in use。证书链、过期证书和主机名不匹配不是 NETWORK_ERROR。最底层已经是连接被拒绝或名字解析失败时，不要改判为 DEPENDENCY_FAILURE。
+            5. DEPENDENCY_FAILURE：依赖的类或库不在 classpath，或下游已经连通但调用失败。例：ClassNotFoundException、NoClassDefFoundError、HTTP 500/502/503。下游可达且返回 2xx，但读取该响应体时出现 JSON 解析或映射错误（UnrecognizedPropertyException、MismatchedInputException、JsonParseException）也是 DEPENDENCY_FAILURE。我们自己的请求入参或本地配置文件上的 JSON 错误不适用本条。没有时限字样的 HTTP 503 仍是 DEPENDENCY_FAILURE。
+            6. UNKNOWN：业务代码缺陷、测试断言或竞态，且不符合以上类别。例：NullPointerException、AssertionFailedError、ConcurrentModificationException。证书信任失败、文件系统权限、下游 2xx 的坏响应体、探针时限和文件描述符耗尽都不要归入 UNKNOWN。
 
             severity 必须是 LOW、MEDIUM、HIGH、CRITICAL 之一：
-            - CRITICAL：只有内存或磁盘耗尽。应用启动失败本身不是 CRITICAL。
-            - HIGH：服务无法完成启动，或一次线上请求失败，例如连不上、认证失败、端口被占用、缺配置、缺类、下游 5xx、请求线程里的空指针。
+            - CRITICAL：只有内存耗尽或磁盘耗尽。Too many open files、EMFILE 和 RejectedExecutionException 不是 CRITICAL。应用启动失败本身不是 CRITICAL。
+            - HIGH：服务无法完成启动，或一次线上请求失败。包括连不上、认证失败、端口被占用、缺配置、TLS 信任失败、文件或目录权限被拒绝、缺类、下游 5xx、下游 2xx 但响应体不可用、探针或健康检查超时、文件描述符耗尽、线程池拒绝、请求线程里的空指针。
             - MEDIUM：自动化测试里的断言失败、测试超时，或测试中的偶发竞态。
             - LOW：已经自动恢复，或只是不影响本次结果的告警。
             """;

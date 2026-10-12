@@ -164,17 +164,52 @@ class AiEvalOfflineTest {
         }
 
         expect(byId, "kafka-rebalance-timeout", "TIMEOUT", "HIGH");
-        expect(byId, "ssl-pkix-path", "UNKNOWN", "HIGH", "UNKNOWN", "CONFIG_ERROR", "NETWORK_ERROR");
+        expect(byId, "ssl-pkix-path", "CONFIG_ERROR", "HIGH");
         expect(byId, "liquibase-checksum", "UNKNOWN", "HIGH", "UNKNOWN", "CONFIG_ERROR");
         expect(byId, "too-many-open-files", "RESOURCE_EXHAUSTED", "HIGH");
         expect(byId, "thread-pool-rejected", "RESOURCE_EXHAUSTED", "HIGH");
         expect(byId, "grpc-unavailable", "NETWORK_ERROR", "HIGH", "NETWORK_ERROR", "DEPENDENCY_FAILURE");
         expect(byId, "mysql-deadlock", "UNKNOWN", "HIGH", "UNKNOWN", "DEPENDENCY_FAILURE");
-        expect(byId, "json-downstream-body", "DEPENDENCY_FAILURE", "HIGH", "DEPENDENCY_FAILURE", "UNKNOWN");
-        expect(byId, "readiness-probe", "TIMEOUT", "HIGH", "TIMEOUT", "DEPENDENCY_FAILURE");
+        expect(byId, "json-downstream-body", "DEPENDENCY_FAILURE", "HIGH");
+        expect(byId, "readiness-probe", "TIMEOUT", "HIGH");
         expect(byId, "selenium-element-missing", "UNKNOWN", "MEDIUM");
         expect(byId, "jar-method-conflict", "DEPENDENCY_FAILURE", "HIGH", "DEPENDENCY_FAILURE", "UNKNOWN");
-        expect(byId, "file-permission-denied", "UNKNOWN", "HIGH", "UNKNOWN", "CONFIG_ERROR");
+        expect(byId, "file-permission-denied", "CONFIG_ERROR", "HIGH");
+    }
+
+    @Test
+    @DisplayName("第三套样本按已拍板边界标注，且与前两套 id 不重复")
+    void holdout2UsesDecidedLabels() throws Exception {
+        List<AiDiagnosisEvalRunner.EvalCase> tuned = AiDiagnosisEvalRunner.loadCases(null);
+        List<AiDiagnosisEvalRunner.EvalCase> holdout = AiDiagnosisEvalRunner.loadCases("ai-eval/holdout");
+        List<AiDiagnosisEvalRunner.EvalCase> second = AiDiagnosisEvalRunner.loadCases("ai-eval/holdout2");
+
+        assertThat(second).hasSize(12);
+        assertThat(second).extracting(AiDiagnosisEvalRunner.EvalCase::id).doesNotHaveDuplicates();
+        assertThat(second).extracting(AiDiagnosisEvalRunner.EvalCase::id)
+                .doesNotContainAnyElementsOf(tuned.stream().map(AiDiagnosisEvalRunner.EvalCase::id).toList())
+                .doesNotContainAnyElementsOf(holdout.stream().map(AiDiagnosisEvalRunner.EvalCase::id).toList());
+
+        Map<String, AiDiagnosisEvalRunner.EvalCase> byId = new LinkedHashMap<>();
+        for (AiDiagnosisEvalRunner.EvalCase evalCase : second) {
+            byId.put(evalCase.id(), evalCase);
+            assertThat(evalCase.description()).isNotBlank();
+            assertThat(evalCase.log().length()).isLessThan(8000);
+            assertThat(evalCase.expected().acceptable()).isEmpty();
+            assertThat(evalCase.expected().labelNote()).isBlank();
+        }
+        expect(byId, "tls-cert-expired", "CONFIG_ERROR", "HIGH");
+        expect(byId, "tls-hostname-mismatch", "CONFIG_ERROR", "HIGH");
+        expect(byId, "spool-permission-denied", "CONFIG_ERROR", "HIGH");
+        expect(byId, "secret-dir-permission", "CONFIG_ERROR", "HIGH");
+        expect(byId, "downstream-mismatched-input", "DEPENDENCY_FAILURE", "HIGH");
+        expect(byId, "downstream-json-parse", "DEPENDENCY_FAILURE", "HIGH");
+        expect(byId, "startup-probe-deadline", "TIMEOUT", "HIGH");
+        expect(byId, "emfile-outbound-socket", "RESOURCE_EXHAUSTED", "HIGH");
+        expect(byId, "dns-name-not-known", "NETWORK_ERROR", "HIGH");
+        expect(byId, "batch-gc-overhead", "RESOURCE_EXHAUSTED", "CRITICAL");
+        expect(byId, "missing-webhook-secret", "CONFIG_ERROR", "HIGH");
+        expect(byId, "assertion-on-hand", "UNKNOWN", "MEDIUM");
     }
 
     @Test
