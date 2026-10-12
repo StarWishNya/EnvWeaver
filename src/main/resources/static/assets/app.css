@@ -285,6 +285,16 @@ tr:hover td { background: rgba(226, 161, 90, 0.05); }
 .clip { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hint, .muted { color: var(--muted); font-size: 13px; }
 .pager { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.pager select { width: auto; }
+.toolbar-check, .log-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+.auto-toggle { width: auto; margin: 0; }
+.log-toolbar .field { min-width: 180px; margin: 0; }
+.jump-logs { margin-top: 8px; }
 
 .badge {
   display: inline-flex;

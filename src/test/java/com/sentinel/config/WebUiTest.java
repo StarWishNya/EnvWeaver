@@ -23,6 +23,9 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.nio.charset.StandardCharsets;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
 import static org.mockito.ArgumentMatchers.any;
@@ -87,10 +90,29 @@ class WebUiTest {
     @Test
     @DisplayName("匿名可以读取脚本和样式")
     void anonymousAssetsArePublic() throws Exception {
-        mockMvc.perform(get("/assets/app.js"))
+        MvcResult script = mockMvc.perform(get("/assets/app.js"))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CONTENT_TYPE, containsString("javascript")))
-                .andExpect(content().string(containsString("sessionStorage")));
+                .andExpect(content().string(containsString("sessionStorage")))
+                .andReturn();
+        // 静态资源没有 charset，MockMvc 按 ISO-8859-1 解开会把中文看花。按 UTF-8 看源码。
+        String source = new String(script.getResponse().getContentAsByteArray(), StandardCharsets.UTF_8);
+        assertThat(source)
+                .contains("visibilityState")
+                .contains("sentinel.ui.")
+                .contains("自动刷新")
+                .contains("上一页")
+                .contains("下一页")
+                .contains("页，共 ")
+                .contains("实时")
+                .contains("暂停")
+                .contains("有新日志")
+                .contains("结束后自动刷新诊断")
+                .contains("LOG_LINE_CAP")
+                .contains("60000")
+                .doesNotContain("innerHTML")
+                .doesNotContain("localStorage.setItem(ACCESS_KEY)")
+                .doesNotContain("localStorage.setItem(REFRESH_KEY)");
 
         mockMvc.perform(get("/assets/app.css"))
                 .andExpect(status().isOk())

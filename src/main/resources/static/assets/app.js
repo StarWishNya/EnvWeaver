@@ -38,6 +38,14 @@ var closeDialog = null;
 var actionBusy = false;
 var taskSeq = 0;
 var clocks = { tasks: null, diagnosis: null, metrics: null };
+var pollers = [];
+var hashEcho = '';
+var mountedKey = '';
+var rendering = false;
+var PAGE_SIZES = [20, 50, 100];
+var LOG_LINE_CAP = 5000;
+var LOG_ORIGIN = '1970-01-01T00:00:00Z';
+var FOCUS_ACTIONS = { cancel: 1, success: 1, fail: 1, prev: 1, next: 1, size: 1, release: 1 };
 
 /* ---------- DOM ---------- */
 
@@ -358,6 +366,148 @@ function report(error) {
 
 function stale(gen) { return gen !== generation; }
 
+/* ---------- 轮询 ---------- */
+
+function readAuto(name) {
+  try {
+    var value = localStorage.getItem('sentinel.ui.' + name);
+    if (value === '0') return false;
+    if (value === '1') return true;
+  } catch (ignore) { /* 隐私模式没有本地存储 */ }
+  return true;
+}
+
+function writeAuto(name, on) {
+  try { localStorage.setItem('sentinel.ui.' + name, on ? '1' : '0'); } catch (ignore) { /* 忽略 */ }
+}
+
+function formatClock(date) {
+  return pad(date.getHours()) + ':' + pad(date.getMinutes()) + ':' + pad(date.getSeconds());
+}
+
+function markUpdated(node) {
+  if (node) node.textContent = '更新于 ' + formatClock(new Date());
+}
+
+function autoToggle(prefName, onChange) {
+  var box = el('input', { type: 'checkbox' });
+  box.checked = readAuto(prefName);
+  var label = add(el('label', { class: 'checks auto-toggle' }), box, text('span', '自动刷新'));
+  on(box, 'change', function () {
+    writeAuto(prefName, box.checked);
+    if (onChange) onChange(box.checked);
+  });
+  return { label: label, box: box };
+}
+
+function stopPollers() {
+  var list = pollers.slice();
+  pollers = [];
+  list.forEach(function (item) { item.stop(); });
+}
+
+/* 当前路由未变、页面可见时每 intervalMs 调一次。隐藏时停表，重新可见立刻补一次。
+   上一次还没回来就跳过这一拍，避免重叠。连续失败则间隔翻倍，最多 60 秒，成功后恢复。 */
+function startPoll(gen, intervalMs, refresh) {
+  var state = { stopped: false, timer: null, inFlight: false, delay: intervalMs, base: intervalMs };
+  function stop() {
+    if (state.stopped) return;
+    state.stopped = true;
+    if (state.timer != null) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+    document.removeEventListener('visibilitychange', onVis);
+    var index = pollers.indexOf(handle);
+    if (index >= 0) pollers.splice(index, 1);
+  }
+  function schedule() {
+    if (state.stopped || stale(gen)) { stop(); return; }
+    if (state.timer != null) return;
+    if (document.visibilityState !== 'visible') return;
+    state.timer = setTimeout(onTick, state.delay);
+  }
+  function onTick() {
+    state.timer = null;
+    if (state.stopped || stale(gen)) { stop(); return; }
+    if (document.visibilityState !== 'visible') return;
+    if (state.inFlight) return;
+    run();
+  }
+  function run() {
+    if (state.stopped || stale(gen) || state.inFlight) return;
+    if (document.visibilityState !== 'visible') return;
+    state.inFlight = true;
+    Promise.resolve().then(refresh).then(function () {
+      state.delay = state.base;
+    }, function () {
+      state.delay = Math.min(60000, state.delay * 2);
+    }).then(function () {
+      state.inFlight = false;
+      if (state.stopped || stale(gen)) { stop(); return; }
+      schedule();
+    });
+  }
+  function onVis() {
+    if (state.stopped || stale(gen)) { stop(); return; }
+    if (state.timer != null) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+    if (document.visibilityState !== 'visible') return;
+    if (!state.inFlight) run();
+  }
+  var handle = { stop: stop };
+  document.addEventListener('visibilitychange', onVis);
+  pollers.push(handle);
+  schedule();
+  return handle;
+}
+
+function captureFocus(scope) {
+  var active = document.activeElement;
+  if (!active || !scope || !scope.contains(active)) return null;
+  var action = active.getAttribute('data-action');
+  if (!action || !FOCUS_ACTIONS[action]) return null;
+  var row = active.closest('[data-id]');
+  var id = row ? row.getAttribute('data-id') || '' : '';
+  if (id && !/^\d+$/.test(id) && id !== 'pager') return null;
+  return { id: id, action: action };
+}
+
+function restoreFocus(scope, saved) {
+  if (!saved || !scope || !FOCUS_ACTIONS[saved.action]) return;
+  if (saved.id && !/^\d+$/.test(saved.id) && saved.id !== 'pager') return;
+  var selector = '[data-action="' + saved.action + '"]';
+  var target = null;
+  if (saved.id) {
+    var host = scope.getAttribute && scope.getAttribute('data-id') === saved.id ? scope : null;
+    if (!host) {
+      var rows = scope.querySelectorAll('[data-id]');
+      for (var i = 0; i < rows.length; i += 1) {
+        if (rows[i].getAttribute('data-id') === saved.id) { host = rows[i]; break; }
+      }
+    }
+    if (host) target = host.getAttribute('data-action') === saved.action ? host : host.querySelector(selector);
+  }
+  if (target && typeof target.focus === 'function') target.focus();
+}
+
+function repaintIfChanged(node, stampSlot, stamp, paint) {
+  if (stampSlot.value === stamp) return false;
+  var x = window.scrollX;
+  var y = window.scrollY;
+  var wrap = node.closest('.table-wrap');
+  var left = wrap ? wrap.scrollLeft : 0;
+  var saved = captureFocus(node);
+  paint();
+  stampSlot.value = stamp;
+  if (wrap) wrap.scrollLeft = left;
+  window.scrollTo(x, y);
+  restoreFocus(node, saved);
+  return true;
+}
+
 /* ---------- 路由与计时 ---------- */
 
 function disarm(name) {
@@ -367,6 +517,7 @@ function disarm(name) {
 
 function disarmAll() {
   Object.keys(clocks).forEach(disarm);
+  stopPollers();
   if (closeDialog) closeDialog();
 }
 
@@ -380,20 +531,42 @@ function arm(name, ms, fn) {
 }
 
 function beginRoute() {
-  disarmAll();
   generation += 1;
+  ui.applyQuery = null;
+  disarmAll();
   return generation;
 }
 
 function parseRoute() {
-  var path = (location.hash || '#/').split('?')[0];
+  var raw = location.hash || '#/';
+  var q = raw.indexOf('?');
+  var path = q === -1 ? raw : raw.slice(0, q);
+  var query = new URLSearchParams(q === -1 ? '' : raw.slice(q + 1));
   var matched = path.match(/^#\/(tasks|environments)\/(\d+)$/);
-  if (matched) return { name: matched[1] === 'tasks' ? 'task' : 'environment', id: matched[2] };
-  if (path === '#/' || path === '#' || path === '') return { name: 'home' };
+  if (matched) return { name: matched[1] === 'tasks' ? 'task' : 'environment', id: matched[2], query: query };
+  if (path === '#/' || path === '#' || path === '') return { name: 'home', query: query };
   if ({ '#/login': 1, '#/tasks': 1, '#/environments': 1, '#/metrics': 1 }[path]) {
-    return { name: path.slice(2) };
+    return { name: path.slice(2), query: query };
   }
-  return { name: 'missing' };
+  return { name: 'missing', query: query };
+}
+
+function routeKey(route) {
+  return route.name + (route.id ? ':' + route.id : '');
+}
+
+function sameHash(left, right) {
+  if (left === right) return true;
+  var a = left || '';
+  var b = right || '';
+  if (a.split('?')[0] !== b.split('?')[0]) return false;
+  var qa = new URLSearchParams(a.indexOf('?') === -1 ? '' : a.slice(a.indexOf('?') + 1));
+  var qb = new URLSearchParams(b.indexOf('?') === -1 ? '' : b.slice(b.indexOf('?') + 1));
+  var keys = ['status', 'page', 'size'];
+  for (var i = 0; i < keys.length; i += 1) {
+    if ((qa.get(keys[i]) || '') !== (qb.get(keys[i]) || '')) return false;
+  }
+  return true;
 }
 
 function onRoute() {
@@ -402,14 +575,32 @@ function onRoute() {
   if (route.name === 'home') { location.hash = authed ? '#/tasks' : '#/login'; return; }
   if (route.name !== 'login' && !authed) { location.hash = '#/login'; return; }
   if (route.name === 'login' && authed) { location.hash = '#/tasks'; return; }
-  render(route, beginRoute());
+  if (hashEcho) {
+    var echoed = hashEcho;
+    hashEcho = '';
+    if (sameHash(location.hash, echoed)) return;
+  }
+  if (rendering) return;
+  var key = routeKey(route);
+  if (key === mountedKey && ui.applyQuery) {
+    syncNav();
+    ui.applyQuery(route);
+    return;
+  }
+  rendering = true;
+  try {
+    render(route, beginRoute());
+    mountedKey = key;
+  } finally {
+    rendering = false;
+  }
 }
 
 function syncNav() {
-  var hash = location.hash || '';
+  var path = (location.hash || '').split('?')[0];
   ui.side.querySelectorAll('a[data-nav]').forEach(function (link) {
     var href = link.getAttribute('href');
-    var on = href === '#/metrics' ? hash === href : hash === href || hash.indexOf(href + '/') === 0;
+    var on = path === href || path.indexOf(href + '/') === 0;
     link.classList.toggle('is-active', on);
     if (on) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
@@ -485,32 +676,97 @@ function runAction(work, gen, reload, okMessage) {
 
 /* ---------- 任务 ---------- */
 
+function knownTaskStatus(status) {
+  for (var i = 0; i < TASK_STATUSES.length; i += 1) {
+    if (TASK_STATUSES[i][0] === status) return true;
+  }
+  return false;
+}
+
+function readTaskQuery(query) {
+  var status = query && query.get ? (query.get('status') || '') : '';
+  if (!knownTaskStatus(status)) status = '';
+  var size = Number(query && query.get ? query.get('size') : NaN);
+  if (PAGE_SIZES.indexOf(size) < 0) size = 20;
+  var page = Number(query && query.get ? query.get('page') : NaN);
+  if (!isFinite(page) || page < 1) page = 1;
+  return { status: status, size: size, page: page - 1 };
+}
+
+function taskListHash(state) {
+  var params = new URLSearchParams();
+  if (state.status) params.set('status', state.status);
+  if (state.page > 0) params.set('page', String(state.page + 1));
+  if (state.size !== 20) params.set('size', String(state.size));
+  var query = params.toString();
+  return '#/tasks' + (query ? '?' + query : '');
+}
+
+function writeTaskHash(state) {
+  var next = taskListHash(state);
+  if (sameHash(location.hash || '#/', next)) return;
+  hashEcho = next;
+  location.hash = next;
+}
+
 function renderTasks(gen) {
   setHeading('任务');
-  var state = { page: 0, size: 20, status: '', testType: '' };
+  var state = readTaskQuery(parseRoute().query);
+  state.testType = '';
+  var createForm = buildCreateForm(gen, function () { return reload(false); });
   var reload = function (fromTimer) { return loadTasks(gen, state, hosts, fromTimer); };
-  var status = selectBox('status', [['', '全部状态']].concat(TASK_STATUSES), '');
+  var status = selectBox('status', [['', '全部状态']].concat(TASK_STATUSES), state.status);
   var testType = selectBox('testType', [['', '全部类型']].concat(TEST_TYPES), '');
   var built = dataTable(['ID', '任务编码', '服务', '测试类型', '状态', '优先级', '创建时间', '环境', '操作']);
   built.table.classList.add('wide-table');
-  var hint = text('p', '', { class: 'hint' });
   var pager = el('div', { class: 'pager' });
-  var hosts = { body: built.body, hint: hint, pager: pager };
+  pager.setAttribute('data-id', 'pager');
+  var updated = text('span', '', { class: 'hint' });
+  var toggle = autoToggle('tasks.autoRefresh');
+  var hosts = { body: built.body, pager: pager, updated: updated, rowStamp: { value: null }, pageStamp: { value: null } };
+  var listPoll = null;
+  function stopListPoll() {
+    if (listPoll) { listPoll.stop(); listPoll = null; }
+  }
+  function startListPoll() {
+    stopListPoll();
+    if (!toggle.box.checked) return;
+    listPoll = startPoll(gen, 5000, function () {
+      if (!toggle.box.checked) return Promise.resolve();
+      if (createForm.isBusy && createForm.isBusy()) return Promise.resolve();
+      return reload(true);
+    });
+  }
   function reset(control, key) {
     state[key] = control.value;
     state.page = 0;
+    writeTaskHash(state);
     reload(false);
   }
-  add(ui.view,
-    buildCreateForm(gen, function () { return reload(false); }),
-    add(el('form', { class: 'card toolbar' }),
-      field('状态', on(status, 'change', function () { reset(status, 'status'); })),
-      field('测试类型', on(testType, 'change', function () { reset(testType, 'testType'); })),
-      btn('刷新', 'btn', function () { reload(false); })),
-    hint,
-    add(el('div', { class: 'table-wrap card' }), built.table),
-    pager);
-  reload(false);
+  on(toggle.box, 'change', function () {
+    if (toggle.box.checked) {
+      reload(false);
+      startListPoll();
+    } else stopListPoll();
+  });
+  ui.applyQuery = function (route) {
+    var next = readTaskQuery(route.query);
+    var same = next.page === state.page && next.size === state.size && next.status === state.status;
+    state.page = next.page;
+    state.size = next.size;
+    state.status = next.status;
+    if (status.value !== state.status) status.value = state.status;
+    if (!same) reload(false);
+  };
+  var filters = add(el('form', { class: 'card toolbar' }),
+    field('状态', on(status, 'change', function () { reset(status, 'status'); })),
+    field('测试类型', on(testType, 'change', function () { reset(testType, 'testType'); })),
+    add(el('div', { class: 'toolbar-check' }), toggle.label, updated),
+    btn('刷新', 'btn', function () { reload(false); }));
+  on(filters, 'submit', function (event) { event.preventDefault(); reload(false); });
+  add(ui.view, createForm, filters, add(el('div', { class: 'table-wrap card' }), built.table), pager);
+  writeTaskHash(state);
+  reload(false).then(function () { if (!stale(gen)) startListPoll(); });
 }
 
 function buildCreateForm(gen, reload) {
@@ -532,6 +788,14 @@ function buildCreateForm(gen, reload) {
     add(el('div', { class: 'field span-all' }), text('span', '依赖'), checks),
     add(el('div', { class: 'field span-all' }), text('span', '可用版本'), versionHint),
     field('其他依赖', depText, 'field span-all'), submit));
+  var dirty = false;
+  on(form, 'input', function () { dirty = true; });
+  on(form, 'change', function () { dirty = true; });
+  form.isBusy = function () {
+    var active = document.activeElement;
+    if (active && form.contains(active)) return true;
+    return dirty;
+  };
   loadCreateCatalog(gen, template, checks, versionHint, templateHint);
   on(form, 'submit', function (event) {
     event.preventDefault();
@@ -563,6 +827,7 @@ function buildCreateForm(gen, reload) {
         var fallback = select.getAttribute('data-default');
         if (fallback) select.value = fallback;
       });
+      dirty = false;
       showOk('任务已创建');
       return reload();
     }).catch(function (error) { if (!stale(gen)) report(error); })
@@ -682,27 +947,52 @@ function collectDeps(form) {
   return list;
 }
 
-function loadTasks(gen, state, hosts, fromTimer) {
-  disarm('tasks');
+function taskRowStamp(task) {
+  if (!task) return null;
+  return [task.id, task.taskCode, task.serviceId, task.testType, task.status, task.priority,
+    task.queuePosition, task.environmentId, task.createdAt, task.errorMessage];
+}
+
+function loadTasks(gen, state, hosts, fromTimer, hops) {
   var seq = ++taskSeq;
+  var step = hops || 0;
   var params = new URLSearchParams({ page: String(state.page), size: String(state.size) });
   if (state.status) params.set('status', state.status);
   if (state.testType) params.set('testType', state.testType);
-  if (!fromTimer) hosts.hint.textContent = '加载中…';
   var reload = function () { return loadTasks(gen, state, hosts, false); };
   return api('/api/tasks?' + params.toString()).then(function (res) {
     if (stale(gen) || seq !== taskSeq) return;
     var page = res.data || {};
     var rows = Array.isArray(page.content) ? page.content : [];
-    paintTaskRows(hosts.body, rows, gen, reload);
-    paintPager(hosts.pager, page, state, reload);
-    var hot = rows.some(function (task) { return task && ACTIVE_TASK[task.status]; });
-    hosts.hint.textContent = hot ? '有进行中的任务，每 5 秒自动刷新' : '';
-    if (hot) arm('tasks', 5000, function () { return loadTasks(gen, state, hosts, true); });
+    var total = Number(page.totalElements || 0);
+    var size = state.size > 0 ? state.size : 20;
+    var last = total <= 0 ? 0 : Math.ceil(total / size) - 1;
+    if (step < 3 && state.page > last) {
+      state.page = last;
+      writeTaskHash(state);
+      return loadTasks(gen, state, hosts, fromTimer, step + 1);
+    }
+    if (step < 3 && !rows.length && state.page > 0) {
+      state.page -= 1;
+      writeTaskHash(state);
+      return loadTasks(gen, state, hosts, fromTimer, step + 1);
+    }
+    var rowStamp = JSON.stringify(rows.map(taskRowStamp));
+    var pageStamp = JSON.stringify([state.page, state.size, Number(page.totalPages || 0), total]);
+    repaintIfChanged(hosts.body, hosts.rowStamp, rowStamp, function () {
+      paintTaskRows(hosts.body, rows, gen, reload);
+    });
+    repaintIfChanged(hosts.pager, hosts.pageStamp, pageStamp, function () {
+      paintPager(hosts.pager, page, state, function () {
+        writeTaskHash(state);
+        return reload();
+      });
+    });
+    markUpdated(hosts.updated);
   }).catch(function (error) {
     if (stale(gen) || seq !== taskSeq) return;
     report(error);
-    if (!error.handled && fromTimer) arm('tasks', 5000, function () { return loadTasks(gen, state, hosts, true); });
+    if (fromTimer) throw error;
   });
 }
 
@@ -730,7 +1020,9 @@ function taskRow(task, gen, reload) {
   var statusCell = add(el('td'), taskStatusBadge(task));
   var queueText = queuePositionText(task);
   if (queueText) statusCell.appendChild(text('div', queueText, { class: 'hint' }));
-  return add(el('tr'),
+  var row = el('tr');
+  if (task && task.id != null && /^\d+$/.test(String(task.id))) row.setAttribute('data-id', String(task.id));
+  return add(row,
     text('td', task.id == null ? '—' : String(task.id), { class: 'num' }),
     clipCell(task.taskCode), clipCell(task.serviceId),
     text('td', labelOf(TEST_TYPES, task.testType)), statusCell,
@@ -744,21 +1036,27 @@ function taskActions(task, gen, reload) {
   var box = el('div', { class: 'actions' });
   var name = task.taskCode || String(task.id);
   if (!TERMINAL_TASK[task.status]) {
-    box.appendChild(btn('取消', 'btn', function () {
+    var cancel = btn('取消', 'btn', function () {
       runAction(function () {
         return confirmDialog('取消任务「' + name + '」？', '确认取消').then(function (ok) {
           return ok ? api('/api/tasks/' + encodeURIComponent(task.id), { method: 'DELETE' }) : null;
         });
       }, gen, reload, '任务已取消');
-    }));
+    });
+    cancel.setAttribute('data-action', 'cancel');
+    box.appendChild(cancel);
   }
   if (task.status === 'RUNNING') {
-    box.appendChild(btn('回报成功', 'btn', function () {
+    var okBtn = btn('回报成功', 'btn', function () {
       runAction(function () { return confirmStatus(task, 'SUCCESS', '成功'); }, gen, reload, '已回报成功');
-    }));
-    box.appendChild(btn('回报失败', 'btn btn-danger', function () {
+    });
+    var badBtn = btn('回报失败', 'btn btn-danger', function () {
       runAction(function () { return confirmStatus(task, 'FAILED', '失败'); }, gen, reload, '已回报失败');
-    }));
+    });
+    okBtn.setAttribute('data-action', 'success');
+    badBtn.setAttribute('data-action', 'fail');
+    box.appendChild(okBtn);
+    box.appendChild(badBtn);
   }
   return box.childNodes.length ? box : null;
 }
@@ -772,14 +1070,28 @@ function confirmStatus(task, status, label) {
 
 function paintPager(host, page, state, reload) {
   var pages = Number(page.totalPages || 0);
-  var prev = btn('上一页', 'btn', function () { if (state.page > 0) { state.page -= 1; reload(); } });
-  var next = btn('下一页', 'btn', function () { if (state.page + 1 < pages) { state.page += 1; reload(); } });
-  var size = selectBox('size', [['10', '10 条/页'], ['20', '20 条/页'], ['50', '50 条/页'], ['100', '100 条/页']], String(state.size));
+  var total = Number(page.totalElements || 0);
+  var current = pages ? state.page + 1 : 0;
+  var prev = btn('上一页', 'btn', function () {
+    if (state.page > 0) { state.page -= 1; reload(); }
+  });
+  var next = btn('下一页', 'btn', function () {
+    if (state.page + 1 < pages) { state.page += 1; reload(); }
+  });
+  var size = selectBox('size', [['20', '20 条/页'], ['50', '50 条/页'], ['100', '100 条/页']], String(state.size));
   prev.disabled = state.page <= 0;
   next.disabled = pages === 0 || state.page + 1 >= pages;
-  on(size, 'change', function () { state.size = Number(size.value); state.page = 0; reload(); });
+  prev.setAttribute('data-action', 'prev');
+  next.setAttribute('data-action', 'next');
+  size.setAttribute('data-action', 'size');
+  on(size, 'change', function () {
+    var picked = Number(size.value);
+    state.size = PAGE_SIZES.indexOf(picked) < 0 ? 20 : picked;
+    state.page = 0;
+    reload();
+  });
   host.replaceChildren(
-    text('span', '第 ' + (pages ? state.page + 1 : 0) + ' / ' + pages + ' 页，共 ' + Number(page.totalElements || 0) + ' 条'),
+    text('span', '第 ' + current + ' / ' + pages + ' 页，共 ' + total + ' 条'),
     prev, next, size);
 }
 
@@ -791,33 +1103,78 @@ function renderTask(gen, id) {
   var side = el('div');
   var logs = buildLogs(gen, id);
   var diagnosis = buildDiagnosis(gen, id);
-  add(ui.view, routeLink('#/tasks', '返回任务列表'),
-    add(el('div', { class: 'split' }), meta, side), logs.panel, diagnosis.panel);
-  loadTask(gen, id, meta, side, false);
-  logs.load();
-  diagnosis.load();
-}
+  var seenActive = false;
+  var statusPoll = null;
+  var detailStamp = '';
+  var envStamp = '';
 
-function loadTask(gen, id, meta, side, fromTimer) {
-  disarm('tasks');
-  return api('/api/tasks/' + encodeURIComponent(id)).then(function (res) {
-    if (stale(gen)) return null;
-    var task = res.data || {};
-    paintTaskDetail(meta, task, gen, function () { return loadTask(gen, id, meta, side, false); });
-    if (ACTIVE_TASK[task.status]) arm('tasks', 5000, function () { return loadTask(gen, id, meta, side, true); });
-    if (task.environmentId == null) {
-      side.replaceChildren(text('div', '尚未关联环境', { class: 'card muted' }));
-      return null;
+  function stopStatus() {
+    if (statusPoll) { statusPoll.stop(); statusPoll = null; }
+  }
+
+  function applyTask(task) {
+    var stamp = JSON.stringify(task || {});
+    var active = !!(task && ACTIVE_TASK[task.status]);
+    var terminal = !!(task && TERMINAL_TASK[task.status]);
+    var becameTerminal = seenActive && terminal;
+    if (stamp !== detailStamp) {
+      detailStamp = stamp;
+      paintTaskDetail(meta, task || {}, gen, function () { return refresh(false); });
+    }
+    logs.noteStatus(task && task.status);
+    if (active) seenActive = true;
+    if (becameTerminal) {
+      stopStatus();
+      diagnosis.load();
+      logs.finish();
+    }
+    if (!task || task.environmentId == null || task.environmentId === '') {
+      if (envStamp !== 'none') {
+        envStamp = 'none';
+        side.replaceChildren(text('div', '尚未关联环境', { class: 'card muted' }));
+      }
+      return task;
     }
     return api('/api/environments/' + encodeURIComponent(task.environmentId)).then(function (envRes) {
-      if (!stale(gen)) side.replaceChildren(environmentSummary(envRes.data || {}, true));
+      if (stale(gen)) return task;
+      var env = envRes.data || {};
+      var nextStamp = JSON.stringify(env);
+      if (nextStamp !== envStamp) {
+        envStamp = nextStamp;
+        side.replaceChildren(environmentSummary(env, true));
+      }
+      return task;
+    }).catch(function (error) {
+      if (!stale(gen)) report(error);
+      return task;
     });
-  }).catch(function (error) {
-    if (stale(gen)) return null;
-    report(error);
-    if (!fromTimer) meta.replaceChildren(text('p', '任务加载失败'));
-    if (!error.handled && fromTimer) arm('tasks', 5000, function () { return loadTask(gen, id, meta, side, true); });
-    return null;
+  }
+
+  function refresh(fromTimer) {
+    return api('/api/tasks/' + encodeURIComponent(id)).then(function (res) {
+      if (stale(gen)) return null;
+      return applyTask(res.data || {});
+    }).catch(function (error) {
+      if (stale(gen)) return null;
+      report(error);
+      if (!fromTimer) meta.replaceChildren(text('p', '任务加载失败'));
+      if (fromTimer) throw error;
+      return null;
+    });
+  }
+
+  add(ui.view, routeLink('#/tasks', '返回任务列表'),
+    add(el('div', { class: 'split' }), meta, side), logs.panel, diagnosis.panel);
+  logs.load();
+  refresh(false).then(function (task) {
+    if (stale(gen)) return;
+    // 进行中的任务还没有诊断。先查会 404，浏览器会把它记成控制台错误。
+    if (task && ACTIVE_TASK[task.status]) {
+      diagnosis.hold();
+      statusPoll = startPoll(gen, 3000, function () { return refresh(true); });
+      return;
+    }
+    diagnosis.load();
   });
 }
 
@@ -850,27 +1207,191 @@ function paintTaskDetail(host, task, gen, reload) {
 
 function buildLogs(gen, id) {
   var tail = selectBox('tail', [['100', '最后 100 行'], ['500', '最后 500 行'], ['2000', '最后 2000 行']], '100');
+  var liveBox = el('input', { type: 'checkbox' });
+  liveBox.disabled = true;
+  var liveLabel = add(el('label', { class: 'checks auto-toggle' }), liveBox, text('span', '实时'));
+  var pauseBtn = btn('暂停', 'btn', function () { setLive(false); });
+  pauseBtn.disabled = true;
   var meta = text('p', '', { class: 'hint' });
   var pre = text('pre', '加载中…', { class: 'logs' });
-  function load() {
-    pre.textContent = '加载中…';
-    meta.textContent = '';
-    return api('/api/tasks/' + encodeURIComponent(id) + '/logs?tail=' + encodeURIComponent(tail.value)).then(function (res) {
+  var jump = btn('有新日志 ↓', 'btn jump-logs', function () {
+    pre.scrollTop = pre.scrollHeight;
+    jump.hidden = true;
+  });
+  jump.hidden = true;
+  var lines = [];
+  var cursor = null;
+  var livePoll = null;
+  var taskActive = false;
+  var userOff = false;
+  var chain = Promise.resolve();
+
+  function nearBottom() {
+    return pre.scrollHeight - pre.scrollTop - pre.clientHeight <= 16;
+  }
+
+  function splitLog(value) {
+    if (value == null || value === '') return [];
+    var parts = String(value).split('\n');
+    if (parts.length && parts[parts.length - 1] === '') parts.pop();
+    return parts;
+  }
+
+  function renderLines(stick) {
+    var dropped = 0;
+    if (lines.length > LOG_LINE_CAP) {
+      dropped = lines.length - LOG_LINE_CAP;
+      lines = lines.slice(lines.length - LOG_LINE_CAP);
+    }
+    var previousTop = pre.scrollTop;
+    var previousHeight = pre.scrollHeight;
+    pre.textContent = lines.length ? lines.join('\n') : '（无日志）';
+    if (stick) {
+      pre.scrollTop = pre.scrollHeight;
+      jump.hidden = true;
+    } else if (dropped > 0 && previousHeight > 0) {
+      pre.scrollTop = Math.max(0, previousTop - (dropped / (dropped + lines.length)) * previousHeight);
+    }
+  }
+
+  function enqueue(work) {
+    var next = chain.then(function () {
+      if (stale(gen)) return null;
+      return work();
+    }, function () {
+      if (stale(gen)) return null;
+      return work();
+    });
+    chain = next.then(function () { return null; }, function () { return null; });
+    return next;
+  }
+
+  function logUrl(tailLines, since) {
+    var params = new URLSearchParams();
+    params.set('tail', String(tailLines));
+    if (since) params.set('since', since);
+    return '/api/tasks/' + encodeURIComponent(id) + '/logs?' + params.toString();
+  }
+
+  function showSnapshot(data) {
+    lines = splitLog(data && data.logs);
+    renderLines(true);
+    cursor = data && data.nextSince ? String(data.nextSince) : null;
+    meta.textContent = data && data.hasMore ? '还有更早的日志未显示' : '';
+    jump.hidden = true;
+  }
+
+  function appendSnapshot(data) {
+    var extra = splitLog(data && data.logs);
+    if (lines.length && extra.length && extra[0].indexOf('--- container ') === 0) {
+      var lastHeader = '';
+      for (var i = lines.length - 1; i >= 0; i -= 1) {
+        if (lines[i].indexOf('--- container ') === 0) { lastHeader = lines[i]; break; }
+      }
+      if (lastHeader === extra[0]) extra.shift();
+    }
+    if (!extra.length) return false;
+    var stick = nearBottom();
+    lines = lines.concat(extra);
+    renderLines(stick);
+    if (!stick) jump.hidden = false;
+    return true;
+  }
+
+  function loadSnapshot() {
+    return api(logUrl(tail.value, LOG_ORIGIN)).then(function (res) {
+      if (stale(gen)) return;
+      showSnapshot(res.data || {});
+    });
+  }
+
+  function loadFollow() {
+    return api(logUrl(LOG_LINE_CAP, cursor)).then(function (res) {
       if (stale(gen)) return;
       var data = res.data || {};
-      pre.textContent = data.logs ? String(data.logs) : '（无日志）';
-      meta.textContent = data.hasMore ? '还有更早的日志未显示' : '';
-    }).catch(function (error) {
+      if (!data.nextSince) return loadSnapshot();
+      var added = appendSnapshot(data);
+      cursor = String(data.nextSince);
+      if (data.hasMore && added) meta.textContent = '新增日志较多，更早的部分可能未显示';
+      else if (!data.hasMore && meta.textContent.indexOf('新增日志较多') === 0) meta.textContent = '';
+    });
+  }
+
+  function pull(replace) {
+    return enqueue(function () {
+      if (replace || !cursor) return loadSnapshot();
+      return loadFollow();
+    });
+  }
+
+  function stopLive() {
+    if (livePoll) { livePoll.stop(); livePoll = null; }
+  }
+
+  function startLive() {
+    stopLive();
+    if (!liveBox.checked || !taskActive) return;
+    livePoll = startPoll(gen, 2000, function () {
+      return pull(false).catch(function (error) {
+        if (!stale(gen) && !(error && error.handled)) report(error);
+        throw error;
+      });
+    });
+  }
+
+  function setLive(on) {
+    userOff = !on;
+    if (on && taskActive) {
+      liveBox.checked = true;
+      pauseBtn.disabled = false;
+      if (!livePoll) startLive();
+    } else {
+      liveBox.checked = false;
+      pauseBtn.disabled = true;
+      stopLive();
+    }
+  }
+
+  function load() {
+    if (!lines.length) pre.textContent = '加载中…';
+    return pull(true).catch(function (error) {
       if (stale(gen)) return;
-      pre.textContent = '日志加载失败';
+      if (!lines.length) pre.textContent = '日志加载失败';
       report(error);
     });
   }
+
+  function noteStatus(status) {
+    var active = !!ACTIVE_TASK[status];
+    taskActive = active;
+    liveBox.disabled = !active;
+    if (!active) return;
+    if (!userOff && !liveBox.checked) liveBox.checked = true;
+    pauseBtn.disabled = !liveBox.checked;
+    if (liveBox.checked && !livePoll) startLive();
+  }
+
+  function finish() {
+    stopLive();
+    taskActive = false;
+    liveBox.checked = false;
+    liveBox.disabled = true;
+    pauseBtn.disabled = true;
+    return pull(false).catch(function (error) {
+      if (!stale(gen)) report(error);
+    });
+  }
+
+  on(liveBox, 'change', function () { setLive(liveBox.checked); });
+  on(tail, 'change', load);
+  on(pre, 'scroll', function () { if (nearBottom()) jump.hidden = true; });
   return {
     panel: add(el('section', { class: 'card' }), text('h2', '日志'),
-      add(el('div', { class: 'toolbar' }), field('行数', on(tail, 'change', load)), btn('刷新日志', 'btn', load)),
-      meta, pre),
-    load: load
+      add(el('div', { class: 'log-toolbar' }), field('行数', tail), liveLabel, pauseBtn, btn('刷新日志', 'btn', load)),
+      meta, pre, jump),
+    load: load,
+    noteStatus: noteStatus,
+    finish: finish
   };
 }
 
@@ -914,8 +1435,15 @@ function buildDiagnosis(gen, id) {
     return form;
   }
 
+  function hold() {
+    disarm('diagnosis');
+    result.textContent = '任务进行中，结束后自动刷新诊断';
+    formHost.hidden = true;
+  }
+
   function load() {
     disarm('diagnosis');
+    result.textContent = '正在读取诊断…';
     return api('/api/diagnosis/' + encodeURIComponent(id)).then(function (res) {
       if (stale(gen)) return;
       var data = res.data || null;
@@ -928,7 +1456,7 @@ function buildDiagnosis(gen, id) {
     });
   }
 
-  return { panel: panel, load: load };
+  return { panel: panel, load: load, hold: hold };
 }
 
 function diagnosisBody(diag, outerCache) {
@@ -1012,36 +1540,68 @@ function environmentSummary(env, linked) {
   ]));
 }
 
+function envRowStamp(env) {
+  if (!env) return null;
+  return [env.id, env.envCode, env.taskId, env.status, env.expiresAt, env.portMappings, env.accessUrl, env.resourceUsage];
+}
+
 function renderEnvironments(gen) {
   setHeading('环境');
   var state = { status: '' };
   var status = selectBox('status', [['', '全部状态']].concat(ENV_STATUSES), '');
   var built = dataTable(['环境编码', '任务', '状态', '端口', '资源', '过期时间', '操作']);
   var meta = text('p', '', { class: 'hint' });
-  function load() {
+  var updated = text('span', '', { class: 'hint' });
+  var toggle = autoToggle('environments.autoRefresh');
+  var rowStamp = { value: null };
+  var envPoll = null;
+  function stopEnvPoll() {
+    if (envPoll) { envPoll.stop(); envPoll = null; }
+  }
+  function load(fromTimer) {
     var params = new URLSearchParams();
     if (state.status) params.set('status', state.status);
     var suffix = params.toString();
-    meta.textContent = '加载中…';
     return api('/api/environments' + (suffix ? '?' + suffix : '')).then(function (res) {
       if (stale(gen)) return;
       var rows = Array.isArray(res.data) ? res.data : [];
-      paintEnvRows(built.body, rows, gen, load);
+      repaintIfChanged(built.body, rowStamp, JSON.stringify(rows.map(envRowStamp)), function () {
+        paintEnvRows(built.body, rows, gen, function () { return load(false); });
+      });
       meta.textContent = '共 ' + rows.length + ' 个环境';
-    }).catch(function (error) { if (!stale(gen)) report(error); });
+      markUpdated(updated);
+    }).catch(function (error) {
+      if (stale(gen)) return;
+      report(error);
+      if (fromTimer) throw error;
+    });
   }
-  add(ui.view,
-    add(el('form', { class: 'card toolbar' }),
-      field('状态', on(status, 'change', function () { state.status = status.value; load(); })),
-      btn('刷新', 'btn', load)),
-    meta, add(el('div', { class: 'table-wrap card' }), built.table));
-  load();
+  function startEnvPoll() {
+    stopEnvPoll();
+    if (!toggle.box.checked) return;
+    envPoll = startPoll(gen, 10000, function () { return load(true); });
+  }
+  on(toggle.box, 'change', function () {
+    if (toggle.box.checked) {
+      load(false);
+      startEnvPoll();
+    } else stopEnvPoll();
+  });
+  var filters = add(el('form', { class: 'card toolbar' }),
+    field('状态', on(status, 'change', function () { state.status = status.value; rowStamp.value = null; load(false); })),
+    add(el('div', { class: 'toolbar-check' }), toggle.label, updated),
+    btn('刷新', 'btn', function () { load(false); }));
+  on(filters, 'submit', function (event) { event.preventDefault(); load(false); });
+  add(ui.view, filters, meta, add(el('div', { class: 'table-wrap card' }), built.table));
+  load(false).then(function () { if (!stale(gen)) startEnvPoll(); });
 }
 
 function paintEnvRows(body, rows, gen, reload) {
   if (!rows.length) { emptyRow(body, 7, '暂无环境'); return; }
   body.replaceChildren.apply(body, rows.map(function (env) {
-    return add(el('tr'),
+    var row = el('tr');
+    if (env && env.id != null && /^\d+$/.test(String(env.id))) row.setAttribute('data-id', String(env.id));
+    return add(row,
       add(el('td'), idLink('environments', env.id, env.envCode || String(env.id))),
       add(el('td'), idLink('tasks', env.taskId)),
       add(el('td'), badge(ENV_STATUSES, env.status)),
@@ -1054,7 +1614,9 @@ function paintEnvRows(body, rows, gen, reload) {
 
 function releaseButton(env, gen, reload) {
   if (!RELEASABLE_ENV[env.status]) return text('span', '—');
-  return btn('释放', 'btn btn-danger', function () { releaseEnv(env, gen, reload); });
+  var button = btn('释放', 'btn btn-danger', function () { releaseEnv(env, gen, reload); });
+  button.setAttribute('data-action', 'release');
+  return button;
 }
 
 function releaseEnv(env, gen, reload) {
@@ -1105,24 +1667,59 @@ function renderMetrics(gen) {
   setHeading('指标');
   var metrics = el('div', { class: 'metric-grid' });
   var healthBody = el('div', { class: 'actions' });
-  add(ui.view, text('p', '每 10 秒刷新', { class: 'hint' }), metrics,
-    add(el('section', { class: 'card' }), text('h2', '依赖健康'), healthBody));
-  loadMetrics(gen, metrics, healthBody);
-}
+  var updated = text('span', '', { class: 'hint' });
+  var toggle = autoToggle('metrics.autoRefresh');
+  var metricStamp = '';
+  var healthStamp = '';
+  var metricPoll = null;
 
-function loadMetrics(gen, metrics, healthBody) {
-  disarm('metrics');
-  return Promise.allSettled([api('/api/metrics'), fetchHealth()]).then(function (settled) {
-    if (stale(gen)) return;
-    var authFailed = settled.some(function (item) {
-      return item.status === 'rejected' && item.reason && item.reason.handled;
+  function load(fromTimer) {
+    return Promise.allSettled([api('/api/metrics'), fetchHealth()]).then(function (settled) {
+      if (stale(gen)) return;
+      var authFailed = settled.some(function (item) {
+        return item.status === 'rejected' && item.reason && item.reason.handled;
+      });
+      if (settled[0].status === 'fulfilled') {
+        var data = settled[0].value.data || {};
+        var stamp = JSON.stringify(data);
+        if (stamp !== metricStamp) {
+          metricStamp = stamp;
+          paintMetrics(metrics, data);
+        }
+      } else if (!authFailed) report(settled[0].reason);
+      if (settled[1].status === 'fulfilled') {
+        var health = JSON.stringify(settled[1].value);
+        if (health !== healthStamp) {
+          healthStamp = health;
+          paintHealth(healthBody, settled[1].value);
+        }
+      } else if (!authFailed) report(settled[1].reason);
+      if (!authFailed) markUpdated(updated);
+      if (authFailed) return;
+      var failed = settled.some(function (item) { return item.status === 'rejected'; });
+      if (failed && fromTimer) throw settled[0].status === 'rejected' ? settled[0].reason : settled[1].reason;
     });
-    if (settled[0].status === 'fulfilled') paintMetrics(metrics, settled[0].value.data || {});
-    else if (!authFailed) report(settled[0].reason);
-    if (settled[1].status === 'fulfilled') paintHealth(healthBody, settled[1].value);
-    else if (!authFailed) report(settled[1].reason);
-    if (!authFailed) arm('metrics', 10000, function () { return loadMetrics(gen, metrics, healthBody); });
+  }
+
+  function stopMetricPoll() {
+    if (metricPoll) { metricPoll.stop(); metricPoll = null; }
+  }
+  function startMetricPoll() {
+    stopMetricPoll();
+    if (!toggle.box.checked) return;
+    metricPoll = startPoll(gen, 10000, function () { return load(true); });
+  }
+  on(toggle.box, 'change', function () {
+    if (toggle.box.checked) {
+      load(false);
+      startMetricPoll();
+    } else stopMetricPoll();
   });
+  add(ui.view,
+    add(el('div', { class: 'toolbar-check' }), toggle.label, updated, btn('刷新', 'btn', function () { load(false); })),
+    metrics,
+    add(el('section', { class: 'card' }), text('h2', '依赖健康'), healthBody));
+  load(false).then(function () { if (!stale(gen)) startMetricPoll(); });
 }
 
 function metricCard(title, value, detail, percent) {
