@@ -109,8 +109,8 @@ logging:
     max-history: 60
 
 # ============================================================================
-# 任务生命周期（测试关闭自动供给和自动诊断，避免碰 Docker / AI）
-# 回收与补扫间隔拉长，且首次执行同样延后，上下文启动时不会立刻跑定时任务。
+# 任务生命周期（测试关闭自动供给、自动诊断和容器核对，避免碰 Docker / AI）
+# 回收、补扫与核对间隔拉长，且首次执行同样延后，上下文启动时不会立刻跑定时任务。
 # ============================================================================
 sentinel:
   security:
@@ -123,6 +123,10 @@ sentinel:
     failed-retention: 30m
     pending-sweep-interval: 24h
     reaper-interval: 24h
+    reconcile:
+      enabled: false
+      interval: 24h
+      grace: 2m
   provisioning:
     ttl: 2h
     port-range: "30000-39999"

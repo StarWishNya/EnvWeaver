@@ -159,6 +159,33 @@ public class DockerContainerLauncher implements ContainerLauncher {
     }
 
     @Override
+    public boolean exists(String containerId) {
+        if (containerId == null || containerId.isBlank()) {
+            return false;
+        }
+        try {
+            dockerClient.inspectContainerCmd(containerId).exec();
+            return true;
+        } catch (RuntimeException ex) {
+            if (isNotFound(ex)) {
+                return false;
+            }
+            throw ex;
+        }
+    }
+
+    private static boolean isNotFound(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof NotFoundException) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    @Override
     public String recentLogs(String containerId, int maxLines) {
         if (containerId == null || containerId.isBlank() || maxLines <= 0) {
             return "";

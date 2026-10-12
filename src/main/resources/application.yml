@@ -217,6 +217,11 @@ sentinel:
     pending-sweep-interval: 30s
     # 过期环境回收间隔
     reaper-interval: 60s
+    # 核对容器是否还在。外部删除容器后把环境标为 ERROR，腾出供给名额。
+    reconcile:
+      enabled: true
+      interval: 60s
+      grace: 2m
   # 按任务依赖启动容器。种类、版本和镜像在 catalog/middleware.yaml。
   # 运维逃生口：要覆盖某种类的默认版本，或增加目录里没有的种类，再写 dependencies.<kind>（须含 image 与 port）。
   provisioning:

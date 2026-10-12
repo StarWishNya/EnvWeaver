@@ -437,14 +437,18 @@ public class TaskLifecycleOrchestrator {
             return;
         }
         // 供给失败时环境已是 ERROR，保留原状态，只把过期时间缩短到失败保留时长。
+        // 已经更早到期的（容器核对把 expiresAt 拨到现在）不再拨晚，否则回收器捞不到。
         // RELEASING、IDLE 不匹配，保持不动。
         LambdaUpdateWrapper<Environment> errorExpiry = new LambdaUpdateWrapper<Environment>()
                 .set(Environment::getExpiresAt, expiresAt)
                 .eq(Environment::getId, task.getEnvironmentId())
-                .eq(Environment::getStatus, "ERROR");
+                .eq(Environment::getStatus, "ERROR")
+                .and(nested -> nested.isNull(Environment::getExpiresAt)
+                        .or()
+                        .gt(Environment::getExpiresAt, expiresAt));
         int errorUpdated = environmentMapper.update(null, errorExpiry);
         if (errorUpdated == 0) {
-            log.info("失败环境未改为保留（当前不是 BUSY、READY 或 ERROR）: taskId={}, envId={}",
+            log.info("失败环境未缩短过期时间（当前不是 ERROR，或过期时间已经不晚于保留时长）: taskId={}, envId={}",
                     task.getId(), task.getEnvironmentId());
             return;
         }

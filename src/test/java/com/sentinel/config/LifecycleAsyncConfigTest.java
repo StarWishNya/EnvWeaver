@@ -38,6 +38,9 @@ class LifecycleAsyncConfigTest {
         assertThat(properties.getFailedRetention()).isEqualTo(Duration.ofMinutes(30));
         assertThat(properties.getPendingSweepInterval()).isEqualTo(Duration.ofSeconds(30));
         assertThat(properties.getReaperInterval()).isEqualTo(Duration.ofSeconds(60));
+        assertThat(properties.getReconcile().isEnabled()).isTrue();
+        assertThat(properties.getReconcile().getInterval()).isEqualTo(Duration.ofSeconds(60));
+        assertThat(properties.getReconcile().getGrace()).isEqualTo(Duration.ofMinutes(2));
     }
 
     @Test
@@ -56,7 +59,9 @@ class LifecycleAsyncConfigTest {
         String main = readResource("application.yml");
         String test = readResource("application-test.yml");
         assertThat(main).contains("auto-provision: true").contains("failed-retention: 30m");
+        assertThat(lifecycleBlock(main)).contains("reconcile:").contains("grace: 2m").contains("interval: 60s");
         assertThat(test).contains("auto-provision: false").contains("auto-diagnose: false");
+        assertThat(lifecycleBlock(test)).contains("enabled: false");
         assertThat(lifecycleBlock(main)).doesNotContain("ttl");
         assertThat(lifecycleBlock(test)).doesNotContain("ttl");
     }

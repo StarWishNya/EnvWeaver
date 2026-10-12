@@ -101,8 +101,10 @@ public interface EnvironmentMapper extends BaseMapper<Environment> {
 
     /**
      * 只更新 resource_usage，不改 status。
-     * resourceUsage 为 null 时写成 SQL NULL。updated_at 可以随行更新而变化。
+     * resourceUsage 为 null 时写成 SQL NULL。
+     * 显式写回 updated_at，避免采样把核对用的更新时间往前拨。
      */
-    @Update("UPDATE t_environment SET resource_usage = #{resourceUsage, jdbcType=VARCHAR} WHERE id = #{id}")
+    @Update("UPDATE t_environment SET resource_usage = #{resourceUsage, jdbcType=VARCHAR}, " +
+            "updated_at = updated_at WHERE id = #{id}")
     int updateResourceUsage(@Param("id") Long id, @Param("resourceUsage") String resourceUsage);
 }

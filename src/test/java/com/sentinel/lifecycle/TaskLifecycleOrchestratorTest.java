@@ -265,6 +265,9 @@ class TaskLifecycleOrchestratorTest {
         assertThat(((AbstractWrapper<?, ?, ?>) updates.get(1)).getSqlSet())
                 .contains("expires_at")
                 .doesNotContain("status");
+        assertThat(((AbstractWrapper<?, ?, ?>) updates.get(1)).getSqlSegment())
+                .contains("expires_at")
+                .contains(">");
         verify(environmentService, never()).releaseEnvironment(any());
     }
 
@@ -378,6 +381,9 @@ class TaskLifecycleOrchestratorTest {
         assertThat(((AbstractWrapper<?, ?, ?>) updates.get(1)).getSqlSet())
                 .contains("expires_at")
                 .doesNotContain("status");
+        assertThat(((AbstractWrapper<?, ?, ?>) updates.get(1)).getSqlSegment())
+                .contains("expires_at")
+                .contains(">");
         verify(environmentService, never()).releaseEnvironment(any());
     }
 
