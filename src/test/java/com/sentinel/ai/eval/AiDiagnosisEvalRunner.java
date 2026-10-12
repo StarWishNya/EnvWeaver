@@ -692,8 +692,8 @@ public final class AiDiagnosisEvalRunner {
             words.add(word);
         }
         int lineCount = log.split("\n", -1).length;
-        if (lineCount < 20 || lineCount > 80) {
-            throw new IllegalStateException(fileName + " 日志行数 " + lineCount + " 不在 20 到 80");
+        if (lineCount < 15 || lineCount > 80) {
+            throw new IllegalStateException(fileName + " 日志行数 " + lineCount + " 不在 15 到 80");
         }
         List<String> acceptable = new ArrayList<>();
         JsonNode acceptableNode = expected.get("acceptable");

@@ -1,0 +1,15 @@
+{
+  "id": "okhttp-trust-anchor-missing",
+  "description": "An OkHttp payout client aborts TLS because the JVM trust store has no anchor for the peer chain.",
+  "log": "2026-10-11 09:14:02.118  INFO 4412 --- [main] com.harborline.ledger.Boot : Starting ledger-api on 10.8.4.21\n2026-10-11 09:14:03.902  INFO 4412 --- [main] o.s.b.w.e.tomcat.TomcatWebServer : Tomcat started on port 8080 (http)\n2026-10-11 09:14:04.011  INFO 4412 --- [main] com.harborline.ledger.Boot : Started ledger-api in 4.6 seconds\n2026-10-11 09:15:12.330  INFO 4412 --- [http-nio-8080-exec-2] c.h.ledger.web.BalanceController : GET /v1/accounts/ac_12 200\n2026-10-11 09:16:18.440  INFO 4412 --- [http-nio-8080-exec-4] c.h.ledger.web.PayoutController : POST /v1/payouts id=po_19c\n2026-10-11 09:16:18.551  INFO 4412 --- [OkHttp https://pay.harborline.internal/...] okhttp3.internal.connection.RealConnection : connecting 10.8.9.14:443\njavax.net.ssl.SSLHandshakeException: PKIX path validation failed: java.security.cert.CertPathValidatorException: trust anchor for certification path not found.\n\tat sun.security.ssl.Alert.createSSLException(Alert.java:131)\n\tat sun.security.ssl.TransportContext.fatal(TransportContext.java:378)\n\tat sun.security.ssl.CertificateMessage$T12CertificateConsumer.checkServerCerts(CertificateMessage.java:654)\n\tat okhttp3.internal.connection.RealConnection.connectTls(RealConnection.kt:403)\n\tat okhttp3.internal.connection.ExchangeFinder.findConnection(ExchangeFinder.kt:226)\n\tat com.harborline.ledger.pay.OkPayClient.post(OkPayClient.java:71)\nCaused by: sun.security.validator.ValidatorException: PKIX path validation failed: java.security.cert.CertPathValidatorException: trust anchor for certification path not found.\n\tat sun.security.validator.PKIXValidator.doValidate(PKIXValidator.java:369)\n\tat sun.security.validator.PKIXValidator.engineValidate(PKIXValidator.java:275)\n\tat sun.security.ssl.X509TrustManagerImpl.checkTrusted(X509TrustManagerImpl.java:285)\n\tat sun.security.ssl.X509TrustManagerImpl.checkServerTrusted(X509TrustManagerImpl.java:144)\n\t... 5 more\nCaused by: java.security.cert.CertPathValidatorException: trust anchor for certification path not found.\n\tat sun.security.provider.certpath.PKIXCertPathValidator.validate(PKIXCertPathValidator.java:154)\n\tat sun.security.provider.certpath.PKIXCertPathValidator.engineValidate(PKIXCertPathValidator.java:145)\n\tat java.security.cert.CertPathValidator.validate(CertPathValidator.java:309)\n\t... 8 more\n2026-10-11 09:16:18.640 ERROR 4412 --- [http-nio-8080-exec-4] c.h.ledger.web.PayoutController : payout po_19c aborted",
+  "expected": {
+    "errorType": "CONFIG_ERROR",
+    "severity": "HIGH",
+    "rootCauseKeywords": [
+      "CertPathValidatorException",
+      "trust anchor",
+      "证书信任",
+      "SSLHandshakeException"
+    ]
+  }
+}

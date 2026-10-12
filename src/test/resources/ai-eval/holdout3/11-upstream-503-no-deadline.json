@@ -1,0 +1,15 @@
+{
+  "id": "upstream-503-no-deadline",
+  "description": "A reachable inventory service answers HTTP 503 and nothing in the log mentions a deadline or a timeout.",
+  "log": "2026-11-03 10:18:22.014  INFO 8611 --- [main] com.oakandiron.shop.ShopApp : Starting shop-api on 10.15.8.20\n2026-11-03 10:18:23.440  INFO 8611 --- [main] o.s.b.w.e.tomcat.TomcatWebServer : Tomcat started on port 8080 (http)\n2026-11-03 10:18:23.501  INFO 8611 --- [main] c.o.shop.ShopApp : Started shop-api in 3.5 seconds\n2026-11-03 10:18:40.090  INFO 8611 --- [http-nio-8080-exec-2] c.o.shop.web.CatalogController : GET /catalog/chairs 200\n2026-11-03 10:19:01.220  INFO 8611 --- [http-nio-8080-exec-5] c.o.shop.web.CartController : GET /cart/88/stock\n2026-11-03 10:19:01.640 ERROR 8611 --- [http-nio-8080-exec-5] c.o.shop.stock.StockClient : inventory call failed\ncom.oakandiron.shop.stock.StockClientException: inventory responded with an error status\n\tat com.oakandiron.shop.stock.StockClient.available(StockClient.java:49)\n\tat com.oakandiron.shop.web.CartController.stock(CartController.java:33)\n\tat java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)\n\tat org.springframework.web.method.support.InvocableHandlerMethod.doInvoke(InvocableHandlerMethod.java:205)\nCaused by: org.springframework.web.client.HttpServerErrorException$ServiceUnavailable: 503 Service Unavailable: \"<html><body>upstream temporarily unavailable</body></html>\"\n\tat org.springframework.web.client.HttpServerErrorException.create(HttpServerErrorException.java:113)\n\tat org.springframework.web.client.DefaultResponseErrorHandler.handleError(DefaultResponseErrorHandler.java:186)\n\tat org.springframework.web.client.RestTemplate.handleResponse(RestTemplate.java:782)\n\tat org.springframework.web.client.RestTemplate.doExecute(RestTemplate.java:736)\n\t... 4 more\n2026-11-03 10:19:01.701 ERROR 8611 --- [http-nio-8080-exec-5] c.o.shop.web.CartController : cart 88 stock lookup failed",
+  "expected": {
+    "errorType": "DEPENDENCY_FAILURE",
+    "severity": "HIGH",
+    "rootCauseKeywords": [
+      "503 Service Unavailable",
+      "HttpServerErrorException",
+      "下游",
+      "inventory"
+    ]
+  }
+}

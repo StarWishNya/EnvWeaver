@@ -558,3 +558,70 @@ Added:
 ### Left undone
 
 Nothing in steps 1–8. No git commit. No parser change, so no new parser test.
+
+## holdout3: independent author (2026-10-12)
+
+holdout2 was written by the same agent that then edited the prompt. That agent did not open the holdout2 baseline results before freezing the prompt, but it knew which exceptions holdout2 used, and the final prompt names several of them (`certificate expired`, `hostname mismatch`, `MismatchedInputException`, `EMFILE`, `deadline exceeded`). The holdout2 result therefore shows that the prompt implements the decisions, not that it generalises to other wording.
+
+holdout3 was written by a separate agent in an empty directory outside the repository. Its session log shows it read only two files: the six category definitions from the pre-change prompt and the "Taxonomy decisions" bullets above. It did not see the prompt, the evaluator, or any existing case. It was told not to use the exact tokens the final prompt names: `PKIX path building failed`, `unable to find valid certification path`, `certificate expired`, `hostname mismatch`, `AccessDeniedException`, `UnrecognizedPropertyException`, `MismatchedInputException`, `JsonParseException`, `Too many open files`, `EMFILE`, `RejectedExecutionException`, `deadline exceeded`. None of them appears in the 12 files.
+
+Mix: 9 cases inside the decided boundaries (2 TLS trust, 2 filesystem permission, 2 reachable 2xx with unusable body, 1 probe timeout, 2 non-memory resource exhaustion) and 3 contrast cases (privileged port bind `Permission denied`, HTTP 503 with no time limit, `NullPointerException` inside a TLS callback).
+
+Scoring decided before any model call: `08-socket-handle-ceiling` is labelled `RESOURCE_EXHAUSTED` as file-descriptor exhaustion, but its log only shows `No buffer space available (maximum connections reached?)`, which is not unambiguously descriptor exhaustion. It is run and reported, but the headline is the other 11 cases. Labels are used as written by the authoring agent; none was changed.
+
+### holdout3 sha256 (2026-10-12 17:20:13 CST, before any model call)
+
+| file | sha256 |
+| --- | --- |
+| `01-okhttp-trust-anchor-missing.json` | `5ad5b752f9fabb9f201156d294c6ce3bcbd8f729fee847a39a054bbf6b21a674` |
+| `02-netty-peer-name-mismatch.json` | `aa300096c15137f7b5547b06173556cff09e16d9a06ae958827aaf85429e182f` |
+| `03-logback-rolling-permission.json` | `8f078cacd8b8469b5a4cf46d0d8cba3018cd81c8129d8e9eabf6b5e1d163dd1a` |
+| `04-outbox-dir-not-writable.json` | `c3b7e463b59b78828304580e3ad521a532f7a47c465971c1759986e919e6a094` |
+| `05-gson-downstream-malformed-body.json` | `10a7fc93e8cce4627975c4c7c1b5a8343ba7e185abb6f328ce7eaa17b118eff4` |
+| `06-jackson-unknown-type-id-200.json` | `578abbf37c57ebc156d2f4e5ff4b5e0caccc3ce107f74ffc36f9f90c20cea4e0` |
+| `07-kube-readiness-probe-timeout.json` | `4faaaf1c96ae86dc00369773bd30f039ab97528185992fb5dc1e9f3eefb6d706` |
+| `08-socket-handle-ceiling.json` | `a5194293c1b25cc59e1c3fd9e1587dd3406cc64528442b2a6cb031a4642650f9` |
+| `09-tomcat-executor-queue-full.json` | `31e71075b0a195b609ab157fc35c0d40e63d2e2ffe74c0a4bb5c987b049a82ae` |
+| `10-privileged-port-bind-denied.json` | `81440fc3bf3839b3fd31687696acae601810f25bbc54fd50cf6e18dc23eb2655` |
+| `11-upstream-503-no-deadline.json` | `1e9aed4c7f02dc09422ee00aac4ff5422a122a9039fdf103daad31f56fe57dbd` |
+| `12-npe-inside-tls-callback.json` | `420dc98c8ff3a15ffa7db3004c574045e0a8189ffe63067c8c14d6d3c80fae50` |
+
+Both prompts are run on holdout3, two runs each: the pre-change prompt from commit `6d0bab2` in a temporary worktree, and the final prompt on this branch. Neither prompt is edited after these runs.
+
+The authoring agent was asked for 15–40 log lines; seven cases have 17–19. The first attempt at 17:21 stopped while loading cases, before any model call, because `AiDiagnosisEvalRunner` required 20–80 lines. The floor was lowered to 15 in both checkouts instead of padding the cases, so the files stay as the independent author wrote them.
+
+### holdout3 results
+
+Runs: pre-change prompt 17:22:44 and 17:23:09, final prompt 17:23:47 and 17:24:10 CST. Every row is `deepseek` / `deepseek-flash`. System prompt length 1150 characters (pre-change) and 2145 (final). All 12 holdout3 files still match the sha256 table after the runs. Pre-change outputs are in `reports/ai-eval-runs-baseline-holdout3/`, final outputs in `reports/ai-eval-runs-final-holdout3/`.
+
+Headline, 11 cases (08 excluded as decided above), two runs each:
+
+| metric | pre-change prompt | final prompt |
+| --- | --- | --- |
+| errorType, exact primary | 15/22 | 22/22 |
+| severity | 20/22 | 22/22 |
+| keyword | 22/22 | 22/22 |
+| parse | 22/22 | 22/22 |
+
+All 12 cases: errorType 16/24 to 24/24, severity 22/24 to 24/24. Mean latency 2052.7 ms to 1934.4 ms.
+
+| case | expected | pre-change run 1 | pre-change run 2 | final, both runs |
+| --- | --- | --- | --- | --- |
+| okhttp-trust-anchor-missing | `CONFIG_ERROR` | `CONFIG_ERROR` | `CONFIG_ERROR` | `CONFIG_ERROR` |
+| netty-peer-name-mismatch | `CONFIG_ERROR` | `NETWORK_ERROR` | `NETWORK_ERROR` | `CONFIG_ERROR` |
+| logback-rolling-permission | `CONFIG_ERROR` | `UNKNOWN` | `CONFIG_ERROR` | `CONFIG_ERROR` |
+| outbox-dir-not-writable | `CONFIG_ERROR` | `CONFIG_ERROR` | `CONFIG_ERROR` | `CONFIG_ERROR` |
+| gson-downstream-malformed-body | `DEPENDENCY_FAILURE` | `UNKNOWN` | `UNKNOWN` | `DEPENDENCY_FAILURE` |
+| jackson-unknown-type-id-200 | `DEPENDENCY_FAILURE` | `UNKNOWN` | `UNKNOWN` | `DEPENDENCY_FAILURE` |
+| kube-readiness-probe-timeout | `TIMEOUT` | `TIMEOUT` | `TIMEOUT` | `TIMEOUT` |
+| socket-handle-ceiling (excluded) | `RESOURCE_EXHAUSTED` | `RESOURCE_EXHAUSTED` | `NETWORK_ERROR` | `RESOURCE_EXHAUSTED` |
+| tomcat-executor-queue-full | `RESOURCE_EXHAUSTED` | `RESOURCE_EXHAUSTED` | `RESOURCE_EXHAUSTED` | `RESOURCE_EXHAUSTED` |
+| privileged-port-bind-denied (contrast) | `NETWORK_ERROR` | `NETWORK_ERROR` | `NETWORK_ERROR` | `NETWORK_ERROR` |
+| upstream-503-no-deadline (contrast) | `DEPENDENCY_FAILURE` | `DEPENDENCY_FAILURE` | `DEPENDENCY_FAILURE` | `DEPENDENCY_FAILURE` |
+| npe-inside-tls-callback (contrast) | `UNKNOWN` | `UNKNOWN` | `UNKNOWN` | `UNKNOWN` |
+
+The two severity misses were `logback-rolling-permission` at `LOW` on both pre-change runs.
+
+The prompt gains are on wording it does not name: OkHttp/Netty TLS peer verification, Logback file permission, Gson `JsonSyntaxException` and Jackson `InvalidTypeIdException` on a 200 body. The three contrast cases stayed correct under both prompts, so the new boundaries did not pull a privileged-port bind, a plain 503, or an NPE in TLS code into the new categories.
+
+Limits: 11 scored cases, one provider, and labels written by one agent from the decision text. This is evidence that the decisions generalise past the exact tokens in the prompt, not a measured accuracy on production logs.

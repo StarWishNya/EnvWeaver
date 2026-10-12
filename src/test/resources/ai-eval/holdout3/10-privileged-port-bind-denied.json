@@ -1,0 +1,15 @@
+{
+  "id": "privileged-port-bind-denied",
+  "description": "The process is denied permission to bind privileged port 80 and the listener never opens.",
+  "log": "2026-02-17 07:55:01.008  INFO 2044 --- [main] io.glassotter.edge.EdgeApp : Starting edge on 10.1.1.4\n2026-02-17 07:55:01.440  INFO 2044 --- [main] io.glassotter.edge.EdgeApp : listener configured for port 80\n2026-02-17 07:55:02.114  INFO 2044 --- [main] o.s.b.w.e.tomcat.TomcatWebServer : Tomcat initialized with port 80 (http)\n2026-02-17 07:55:02.330 ERROR 2044 --- [main] o.s.b.w.e.tomcat.TomcatWebServer : Tomcat failed to start\norg.springframework.boot.web.server.WebServerException: Unable to start embedded Tomcat\n\tat org.springframework.boot.web.embedded.tomcat.TomcatWebServer.initialize(TomcatWebServer.java:147)\n\tat org.springframework.boot.web.embedded.tomcat.TomcatWebServer.<init>(TomcatWebServer.java:107)\n\tat io.glassotter.edge.EdgeApp.main(EdgeApp.java:22)\nCaused by: org.apache.catalina.LifecycleException: Protocol handler start failed\n\tat org.apache.catalina.connector.Connector.startInternal(Connector.java:1075)\n\tat org.apache.catalina.util.LifecycleBase.start(LifecycleBase.java:183)\n\tat org.apache.catalina.core.StandardService.addConnector(StandardService.java:222)\n\t... 3 more\nCaused by: java.net.BindException: Permission denied\n\tat java.base/sun.nio.ch.Net.bind0(Native Method)\n\tat java.base/sun.nio.ch.Net.bind(Net.java:555)\n\tat java.base/sun.nio.ch.ServerSocketChannelImpl.bind(ServerSocketChannelImpl.java:249)\n\tat org.apache.tomcat.util.net.NioEndpoint.initServerSocket(NioEndpoint.java:241)\n\tat org.apache.tomcat.util.net.NioEndpoint.bind(NioEndpoint.java:196)\n\t... 6 more\n2026-02-17 07:55:02.410 ERROR 2044 --- [main] io.glassotter.edge.EdgeApp : edge exited, port 80 not open",
+  "expected": {
+    "errorType": "NETWORK_ERROR",
+    "severity": "HIGH",
+    "rootCauseKeywords": [
+      "BindException",
+      "Permission denied",
+      "端口绑定",
+      "port 80"
+    ]
+  }
+}

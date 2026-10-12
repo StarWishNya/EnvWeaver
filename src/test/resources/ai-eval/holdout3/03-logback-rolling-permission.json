@@ -1,0 +1,15 @@
+{
+  "id": "logback-rolling-permission",
+  "description": "Logback cannot open its rolling log file because the process is not allowed to write that path.",
+  "log": "2026-07-19 02:11:06.220  INFO 3308 --- [main] net.copperbay.invoice.InvoiceApp : Starting invoice-svc on 172.16.4.30\n2026-07-19 02:11:07.014  INFO 3308 --- [main] o.s.b.w.e.tomcat.TomcatWebServer : Tomcat started on port 8444 (https)\n2026-07-19 02:11:07.880  INFO 3308 --- [main] n.c.invoice.InvoiceApp : Started invoice-svc in 5.2 seconds\n2026-07-19 02:11:08.102  INFO 3308 --- [http-nio-8444-exec-1] n.c.invoice.web.HealthController : GET /internal/ping 200\n2026-07-19 05:12:44.300  INFO 3308 --- [http-nio-8444-exec-7] n.c.invoice.web.InvoiceController : POST /invoices id=inv-300 201\n2026-07-19 06:00:00.041 ERROR 3308 --- [logback-1] ch.qos.logback.core.FileAppender : openFile(/var/log/invoice/invoice.log,true) call failed. java.io.FileNotFoundException: /var/log/invoice/invoice.log (Permission denied)\njava.lang.IllegalStateException: java.io.FileNotFoundException: /var/log/invoice/invoice.log (Permission denied)\n\tat net.copperbay.invoice.logging.RollHook.trigger(RollHook.java:33)\n\tat ch.qos.logback.core.rolling.RollingFileAppender.rollover(RollingFileAppender.java:222)\n\tat ch.qos.logback.core.rolling.RollingFileAppender.subAppend(RollingFileAppender.java:235)\n\tat ch.qos.logback.core.OutputStreamAppender.append(OutputStreamAppender.java:106)\nCaused by: java.io.FileNotFoundException: /var/log/invoice/invoice.log (Permission denied)\n\tat java.base/java.io.FileOutputStream.open0(Native Method)\n\tat java.base/java.io.FileOutputStream.open(FileOutputStream.java:293)\n\tat java.base/java.io.FileOutputStream.<init>(FileOutputStream.java:235)\n\tat ch.qos.logback.core.recovery.ResilientFileOutputStream.<init>(ResilientFileOutputStream.java:26)\n\tat ch.qos.logback.core.FileAppender.openFile(FileAppender.java:206)\n\t... 4 more\n2026-07-19 06:00:00.188  WARN 3308 --- [logback-1] n.c.invoice.logging.RollHook : rollover aborted, previous file kept",
+  "expected": {
+    "errorType": "CONFIG_ERROR",
+    "severity": "HIGH",
+    "rootCauseKeywords": [
+      "Permission denied",
+      "FileAppender",
+      "文件权限",
+      "invoice.log"
+    ]
+  }
+}
