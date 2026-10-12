@@ -13,6 +13,7 @@ DB_PORT="${DB_PORT:-3306}"
 DB_USERNAME="${DB_USERNAME:-root}"
 DB_NAME="${DB_NAME:-sentinel}"
 SCHEMA_FILE="${SCHEMA_FILE:-${ROOT}/src/main/resources/schema.sql}"
+DATA_FILE="${DATA_FILE:-${ROOT}/src/main/resources/data.sql}"
 
 if [[ -z "${DB_PASSWORD:-}" ]]; then
   echo "DB_PASSWORD is required" >&2
@@ -36,6 +37,10 @@ if [[ ! "$DB_USERNAME" =~ ^[A-Za-z0-9._-]+$ ]]; then
 fi
 if [[ ! -f "$SCHEMA_FILE" ]]; then
   echo "schema file not found: $SCHEMA_FILE" >&2
+  exit 1
+fi
+if [[ ! -f "$DATA_FILE" ]]; then
+  echo "data file not found: $DATA_FILE" >&2
   exit 1
 fi
 
@@ -88,12 +93,17 @@ fi
 echo "loading ${SCHEMA_FILE}"
 mysql_cli --batch <"$SCHEMA_FILE"
 
+# schema.sql 只建 admin。测试还要用 data.sql 里的 user/user123，语句都是 ON DUPLICATE KEY，可重复执行。
+echo "loading ${DATA_FILE}"
+mysql_cli --batch "$DB_NAME" <"$DATA_FILE"
+
 tables="$(mysql_cli --batch -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${DB_NAME}' AND table_name IN ('t_task','t_user','t_environment','t_container','t_diagnosis_cache','t_system_config')")"
 routines="$(mysql_cli --batch -N -e "SELECT COUNT(*) FROM information_schema.routines WHERE routine_schema='${DB_NAME}' AND routine_name IN ('sp_cleanup_expired_environments','sp_cleanup_old_diagnosis_cache')")"
 admin="$(mysql_cli --batch -N -e "SELECT COUNT(*) FROM ${DB_NAME}.t_user WHERE username='admin'")"
+user="$(mysql_cli --batch -N -e "SELECT COUNT(*) FROM ${DB_NAME}.t_user WHERE username='user'")"
 
-if [[ "$tables" != "6" || "$routines" != "2" || "$admin" != "1" ]]; then
-  echo "schema verification failed: tables=${tables} routines=${routines} admin=${admin}" >&2
+if [[ "$tables" != "6" || "$routines" != "2" || "$admin" != "1" || "$user" != "1" ]]; then
+  echo "schema verification failed: tables=${tables} routines=${routines} admin=${admin} user=${user}" >&2
   exit 1
 fi
-echo "schema loaded: tables=${tables} routines=${routines} admin=${admin}"
+echo "schema loaded: tables=${tables} routines=${routines} admin=${admin} user=${user}"
