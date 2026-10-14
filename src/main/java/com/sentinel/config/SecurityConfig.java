@@ -1,10 +1,15 @@
 package com.sentinel.config;
 
+import com.sentinel.config.properties.SecurityProperties;
 import com.sentinel.service.UserDetailsServiceImpl;
+import jakarta.servlet.DispatcherType;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -15,6 +20,13 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Spring Security 配置类
@@ -42,22 +54,37 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
             .csrf(AbstractHttpConfigurer::disable)
+            .cors(Customizer.withDefaults())
             .sessionManagement(session -> session
                 .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
             )
+            .exceptionHandling(ex -> ex.authenticationEntryPoint((request, response, authException) ->
+                writeJson(response, HttpServletResponse.SC_UNAUTHORIZED, 1001, "未授权，请先登录")
+            ))
             .authorizeHttpRequests(auth -> auth
+                // 错误转发不再套一层认证，否则未映射路径会变成空的 403
+                .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                 // 允许匿名访问的端点
                 .requestMatchers(
                     "/api/auth/login",
                     "/api/health",
+                    "/api/metrics/health",
                     "/actuator/health",
-                    "/actuator/prometheus",
+                    "/error",
+                    "/swagger-ui.html",
                     "/swagger-ui/**",
                     "/api-docs/**",
                     "/v3/api-docs/**"
                 ).permitAll()
-                // 管理员接口
-                .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                // 内置控制台只放行 GET。Ant 匹配器才能命中 classpath 静态资源；POST 和其他路径仍要认证。
+                .requestMatchers(
+                    AntPathRequestMatcher.antMatcher(HttpMethod.GET, "/"),
+                    AntPathRequestMatcher.antMatcher(HttpMethod.GET, "/index.html"),
+                    AntPathRequestMatcher.antMatcher(HttpMethod.GET, "/assets/**"),
+                    AntPathRequestMatcher.antMatcher(HttpMethod.GET, "/favicon.ico")
+                ).permitAll()
+                // 管理员接口；除 health 外的 actuator 端点（含 prometheus 指标）只对管理员开放
+                .requestMatchers("/api/admin/**", "/actuator/**").hasRole("ADMIN")
                 // 其他接口需要认证
                 .anyRequest().authenticated()
             )
@@ -65,6 +92,34 @@ public class SecurityConfig {
             .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
         
         return http.build();
+    }
+
+    /**
+     * 使用 security.cors 配置跨域。浏览器预检由 CorsFilter 直接响应。
+     */
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource(SecurityProperties securityProperties) {
+        SecurityProperties.Cors cors = securityProperties.getCors();
+        CorsConfiguration config = new CorsConfiguration();
+        config.setAllowedOrigins(cors.getAllowedOrigins());
+        config.setAllowedMethods(cors.getAllowedMethods());
+        config.setAllowedHeaders(cors.getAllowedHeaders());
+        config.setAllowCredentials(Boolean.TRUE.equals(cors.getAllowCredentials()));
+        if (cors.getMaxAge() != null) {
+            config.setMaxAge(cors.getMaxAge());
+        }
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", config);
+        return source;
+    }
+
+    private static void writeJson(HttpServletResponse response, int httpStatus, int code, String message)
+            throws IOException {
+        response.setStatus(httpStatus);
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        response.setContentType("application/json;charset=UTF-8");
+        String body = "{\"code\":" + code + ",\"message\":\"" + message + "\",\"data\":null}";
+        response.getOutputStream().write(body.getBytes(StandardCharsets.UTF_8));
     }
 
     /**

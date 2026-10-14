@@ -1,0 +1,162 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# Fixed CI-only passwords. They are not secrets and must not be copied from .env.
+# Test profile connection keys (src/test/resources/config/application-test.yml,
+# plus REDIS_PORT from src/main/resources/application-test.yml):
+#   DB_HOST DB_PORT DB_NAME DB_USERNAME DB_PASSWORD REDIS_HOST REDIS_PORT REDIS_PASSWORD
+# JWT_SECRET is optional for tests; the test classpath supplies a 32+ character default.
+# Dev profile hardcodes jdbc:mysql://localhost:3306/sentinel. SPRING_DATASOURCE_URL
+# overrides that property so smoke uses IPv4 and the same database the schema loads.
+# Service blocks repeat the passwords because service containers do not inherit job env.
+env:
+  DB_HOST: 127.0.0.1
+  DB_PORT: "3306"
+  DB_NAME: sentinel
+  DB_USERNAME: root
+  DB_PASSWORD: ci-only-mysql-password
+  REDIS_HOST: 127.0.0.1
+  REDIS_PORT: "6379"
+  REDIS_PASSWORD: ci-only-redis-password
+  SPRING_DATASOURCE_URL: "jdbc:mysql://127.0.0.1:3306/sentinel?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai"
+  SPRING_DATASOURCE_USERNAME: root
+  SPRING_DATASOURCE_PASSWORD: ci-only-mysql-password
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci-only-mysql-password
+          MYSQL_DATABASE: sentinel
+          TZ: Asia/Shanghai
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost -uroot -pci-only-mysql-password --silent"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+          --health-start-period 30s
+      redis:
+        image: redis:7-alpine
+        # Image entrypoint prepends redis-server when the first argument starts with "-".
+        command: --requirepass ci-only-redis-password
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli -a ci-only-redis-password --no-auth-warning ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Temurin JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Load MySQL schema
+        run: bash scripts/ci/load-schema.sh
+
+      - name: Run tests
+        run: mvn -B test
+
+      - name: Upload surefire reports
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  smoke:
+    name: smoke
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Dev profile requires JWT_SECRET (no default). Tests do not.
+      JWT_SECRET: ci-only-jwt-secret-key-0123456789abcdef
+      SERVER_PORT: "18080"
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci-only-mysql-password
+          MYSQL_DATABASE: sentinel
+          TZ: Asia/Shanghai
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost -uroot -pci-only-mysql-password --silent"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+          --health-start-period 30s
+      redis:
+        image: redis:7-alpine
+        command: --requirepass ci-only-redis-password
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli -a ci-only-redis-password --no-auth-warning ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Temurin JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Load MySQL schema
+        run: bash scripts/ci/load-schema.sh
+
+      - name: Build jar
+        run: mvn -B package -DskipTests
+
+      # scripts/ai-smoke-test.sh needs provider API keys and is intentionally not run.
+      - name: Run HTTP smoke test
+        env:
+          BASE_URL: http://localhost:18080
+        run: bash scripts/ci/smoke-app.sh
+
+      - name: Print application log
+        if: failure()
+        run: |
+          log="${RUNNER_TEMP}/sentinel-app.log"
+          echo "===== ${log} ====="
+          if [[ -f "$log" ]]; then
+            tail -n 200 "$log"
+          else
+            echo "application log not found: ${log}"
+          fi
+          if [[ -f logs/sentinel-dev.log ]]; then
+            echo "===== logs/sentinel-dev.log ====="
+            tail -n 200 logs/sentinel-dev.log
+          fi

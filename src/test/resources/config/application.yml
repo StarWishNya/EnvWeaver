@@ -1,0 +1,8 @@
+# ============================================================================
+# 测试 classpath 覆盖配置（仅 src/test/resources，所有 profile 生效）
+# 主配置 jwt.secret 没有默认值；未激活 profile 的切片测试（如 @WebMvcTest）
+# 也需要一个合法密钥才能通过 JwtProperties 校验。环境变量 JWT_SECRET 仍可覆盖。
+# ============================================================================
+
+jwt:
+  secret: ${JWT_SECRET:sentinel-test-only-jwt-secret-key-0123456789abcdef}

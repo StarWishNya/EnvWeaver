@@ -31,7 +31,7 @@ public class Environment {
     private Long taskId;
 
     /**
-     * 状态: CREATING, READY, BUSY, RELEASING, IDLE, ERROR
+     * 状态: CREATING, READY, BUSY, RELEASING, IDLE, ERROR, RETAINED
      */
     private String status;
 

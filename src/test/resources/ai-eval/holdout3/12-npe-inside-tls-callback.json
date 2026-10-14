@@ -1,0 +1,15 @@
+{
+  "id": "npe-inside-tls-callback",
+  "description": "Application code throws a NullPointerException from its handshake listener after the SMTP socket is already up.",
+  "log": "2026-12-01 18:27:40.009  INFO 1502 --- [main] net.violetquay.mailer.MailerApp : Starting mailer on 10.9.9.9\n2026-12-01 18:27:41.220  INFO 1502 --- [main] o.s.b.w.e.tomcat.TomcatWebServer : Tomcat started on port 8025 (http)\n2026-12-01 18:27:41.280  INFO 1502 --- [main] n.v.mailer.MailerApp : Started mailer in 2.7 seconds\n2026-12-01 18:27:55.014  INFO 1502 --- [http-nio-8025-exec-1] n.v.mailer.web.HealthController : GET /health 200\n2026-12-01 18:28:05.114  INFO 1502 --- [http-nio-8025-exec-2] n.v.mailer.web.SendController : POST /send id=m-17\n2026-12-01 18:28:05.440  INFO 1502 --- [http-nio-8025-exec-2] n.v.mailer.smtp.SmtpSession : handshake finished with smtp.violetquay.net:465\n2026-12-01 18:28:05.448 ERROR 1502 --- [http-nio-8025-exec-2] n.v.mailer.web.SendController : send m-17 crashed\njava.lang.IllegalStateException: handshake listener failed\n\tat net.violetquay.mailer.smtp.SmtpSession.onHandshakeCompleted(SmtpSession.java:91)\n\tat net.violetquay.mailer.web.SendController.send(SendController.java:44)\n\tat java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)\n\tat org.springframework.web.method.support.InvocableHandlerMethod.doInvoke(InvocableHandlerMethod.java:205)\nCaused by: java.lang.NullPointerException: Cannot invoke \"net.violetquay.mailer.smtp.SessionToken.tenant()\" because \"token\" is null\n\tat net.violetquay.mailer.smtp.HandshakeAudit.afterHandshake(HandshakeAudit.java:27)\n\tat net.violetquay.mailer.smtp.SmtpSession.onHandshakeCompleted(SmtpSession.java:88)\n\t... 3 more\n2026-12-01 18:28:05.510 ERROR 1502 --- [http-nio-8025-exec-2] n.v.mailer.smtp.SmtpSession : audit hook returned",
+  "expected": {
+    "errorType": "UNKNOWN",
+    "severity": "HIGH",
+    "rootCauseKeywords": [
+      "NullPointerException",
+      "afterHandshake",
+      "空指针",
+      "because \"token\" is null"
+    ]
+  }
+}

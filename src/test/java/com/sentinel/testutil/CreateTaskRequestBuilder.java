@@ -2,15 +2,17 @@ package com.sentinel.testutil;
 
 import com.sentinel.dto.CreateTaskRequest;
 
+import java.util.List;
+
 /**
  * CreateTaskRequest 测试数据构建器
  */
 public class CreateTaskRequestBuilder {
 
-    private String taskCode = "TEST-" + System.currentTimeMillis();
+    private String taskCode = "TEST-" + TestUtils.uniqueToken();
     private String serviceId = "test-service";
     private String testType = "UNIT_TEST";
-    private String dependencies = "[\"mysql:8.0\"]";
+    private List<String> dependencies = List.of("mysql:8.0");
     private Integer priority = 5;
 
     public static CreateTaskRequestBuilder aCreateTaskRequest() {
@@ -32,7 +34,7 @@ public class CreateTaskRequestBuilder {
         return this;
     }
 
-    public CreateTaskRequestBuilder withDependencies(String dependencies) {
+    public CreateTaskRequestBuilder withDependencies(List<String> dependencies) {
         this.dependencies = dependencies;
         return this;
     }

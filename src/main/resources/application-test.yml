@@ -73,18 +73,14 @@ cache:
   token-blacklist-ttl: 43200  # 12小时
   key-prefix: "sentinel:test:"
 
-# AI 配置（测试环境 - 可使用 OpenAI 或本地）
+# AI 配置（测试环境 - 默认本地 Ollama，可用 AI_PROVIDER_ORDER 覆盖）
 ai:
-  provider: ${AI_PROVIDER:ollama}
-  ollama:
-    base-url: ${OLLAMA_BASE_URL:http://test-ollama:11434}
-    model: ${OLLAMA_MODEL:qwen2.5:7b}
-    timeout: 120
-  openai:
-    base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
-    api-key: ${OPENAI_API_KEY}
-    model: ${OPENAI_MODEL:gpt-3.5-turbo}
-    timeout: 60
+  provider-order: ${AI_PROVIDER_ORDER:${AI_PROVIDER:ollama}}
+  providers:
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://test-ollama:11434}
+      model: ${OLLAMA_MODEL:qwen2.5:7b}
+      timeout: 120
 
 # Docker 配置（测试环境）
 docker:
@@ -111,3 +107,43 @@ logging:
     name: /var/log/sentinel/sentinel-test.log
     max-size: 200MB
     max-history: 60
+
+# ============================================================================
+# 任务生命周期（测试关闭自动供给、自动诊断和容器核对，避免碰 Docker / AI）
+# 回收、补扫与核对间隔拉长，且首次执行同样延后，上下文启动时不会立刻跑定时任务。
+# ============================================================================
+sentinel:
+  security:
+    # 测试默认关闭。单个测试可设置 sentinel.security.credential-check 打开。
+    # off 必须加引号，YAML 1.1 会把不加引号的 off 解析成布尔 false。
+    credential-check: "off"
+  lifecycle:
+    auto-provision: false
+    auto-diagnose: false
+    failed-retention: 30m
+    pending-sweep-interval: 24h
+    reaper-interval: 24h
+    reconcile:
+      enabled: false
+      interval: 24h
+      grace: 2m
+  provisioning:
+    ttl: 2h
+    port-range: "30000-39999"
+    pull-missing: true
+    pull-timeout: 5m
+    ready-timeout: 90s
+    host: localhost
+    limits:
+      max-active-environments: 10
+      max-containers: 30
+    # 依赖以 catalog/middleware.yaml 为准。覆盖默认版本时再写 dependencies.<kind>。
+
+  # 测试不采样，避免访问 Docker。间隔拉长，启动后不会立刻调度。
+  monitoring:
+    resource-usage:
+      enabled: false
+      interval: 24h
+      read-timeout: 5s
+      max-environments-per-pass: 200
+      parallelism: 4

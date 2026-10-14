@@ -27,16 +27,6 @@ public class SecurityProperties {
     private Cors cors = new Cors();
 
     /**
-     * 白名单路径（不需要认证）
-     */
-    private List<String> whitelistPaths = List.of(
-            "/api/auth/**",
-            "/actuator/health",
-            "/swagger-ui/**",
-            "/v3/api-docs/**"
-    );
-
-    /**
      * 登录尝试配置
      */
     @Data

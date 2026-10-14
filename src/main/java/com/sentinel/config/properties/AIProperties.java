@@ -1,14 +1,21 @@
 package com.sentinel.config.properties;
 
-import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
+import com.sentinel.ai.AIProtocol;
 import lombok.Data;
+import lombok.ToString;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
 /**
- * AI 服务配置属性
+ * AI 服务配置。
+ * provider-order 为逗号分隔的提供商名称，第一项优先。
+ * 每个 providers 条目可选 timeout（秒，默认 60）、max-tokens（默认 2000）、
+ * temperature（默认 0.3）、enabled（默认 true）、thinking（不设置 / disabled / enabled）。
  */
 @Data
 @Validated
@@ -16,138 +23,83 @@ import org.springframework.validation.annotation.Validated;
 public class AIProperties {
 
     /**
-     * AI 提供商类型（ollama/openai/custom）
+     * 逗号分隔的调用顺序。未配置时默认 ollama。
      */
-    @NotBlank(message = "AI 提供商类型不能为空")
-    private String provider = "ollama";
+    private String providerOrder = "ollama";
 
     /**
-     * Ollama 配置
+     * 已命名的提供商。键是提供商名称，例如 deepseek。
      */
-    @NotNull(message = "Ollama 配置不能为空")
-    private OllamaConfig ollama = new OllamaConfig();
+    private Map<String, Provider> providers = new LinkedHashMap<>();
 
     /**
-     * OpenAI 配置
+     * 按配置顺序返回去掉空白后的提供商名称。
      */
-    @NotNull(message = "OpenAI 配置不能为空")
-    private OpenAIConfig openai = new OpenAIConfig();
-
-    /**
-     * 自定义 AI 配置
-     */
-    @NotNull(message = "自定义 AI 配置不能为空")
-    private CustomConfig custom = new CustomConfig();
-
-    /**
-     * Ollama 配置类
-     */
-    @Data
-    public static class OllamaConfig {
-        /**
-         * Ollama 服务地址
-         */
-        @NotBlank(message = "Ollama 服务地址不能为空")
-        private String baseUrl = "http://localhost:11434";
-
-        /**
-         * 使用的模型名称
-         */
-        @NotBlank(message = "Ollama 模型名称不能为空")
-        private String model = "qwen2.5:7b";
-
-        /**
-         * 请求超时时间（秒）
-         */
-        @Min(value = 10, message = "超时时间不能少于10秒")
-        private Integer timeout = 120;
-
-        /**
-         * 是否使用流式响应
-         */
-        private Boolean stream = false;
-
-        /**
-         * 温度参数（0.0-1.0）
-         */
-        private Double temperature = 0.7;
+    public List<String> orderedProviderNames() {
+        if (providerOrder == null || providerOrder.isBlank()) {
+            return List.of();
+        }
+        List<String> names = new ArrayList<>();
+        for (String part : providerOrder.split(",")) {
+            String name = part.trim();
+            if (!name.isEmpty()) {
+                names.add(name);
+            }
+        }
+        return List.copyOf(names);
     }
 
     /**
-     * OpenAI 配置类
+     * 单个提供商配置。
      */
     @Data
-    public static class OpenAIConfig {
-        /**
-         * OpenAI API 地址
-         */
-        @NotBlank(message = "OpenAI API 地址不能为空")
-        private String baseUrl = "https://api.openai.com/v1";
+    public static class Provider {
 
         /**
-         * API 密钥
+         * 协议：openai / anthropic / ollama。
          */
-        private String apiKey;
+        private AIProtocol protocol;
 
         /**
-         * 使用的模型名称
-         */
-        @NotBlank(message = "OpenAI 模型名称不能为空")
-        private String model = "gpt-3.5-turbo";
-
-        /**
-         * 请求超时时间（秒）
-         */
-        @Min(value = 10, message = "超时时间不能少于10秒")
-        private Integer timeout = 60;
-
-        /**
-         * 最大 token 数
-         */
-        @Min(value = 100, message = "最大 token 数不能少于100")
-        private Integer maxTokens = 2000;
-
-        /**
-         * 温度参数（0.0-1.0）
-         */
-        private Double temperature = 0.7;
-    }
-
-    /**
-     * 自定义 AI 配置类（OpenAI 兼容 API）
-     */
-    @Data
-    public static class CustomConfig {
-        /**
-         * 自定义 AI API 地址
+         * 服务根地址，末尾斜杠会被忽略。
          */
         private String baseUrl;
 
         /**
-         * API 密钥
+         * API 密钥。Ollama 不使用。不进入 toString，避免日志带出密钥。
          */
+        @ToString.Exclude
         private String apiKey;
 
         /**
-         * 使用的模型名称
+         * 模型名称。
          */
         private String model;
 
         /**
-         * 请求超时时间（秒）
+         * 超时时间（秒），默认 60。
          */
-        @Min(value = 10, message = "超时时间不能少于10秒")
         private Integer timeout = 60;
 
         /**
-         * 最大 token 数
+         * 最大生成 token 数，默认 2000。Ollama 映射为 num_predict。
          */
-        @Min(value = 100, message = "最大 token 数不能少于100")
         private Integer maxTokens = 2000;
 
         /**
-         * 温度参数（0.0-1.0）
+         * 温度，默认 0.3。
          */
-        private Double temperature = 0.7;
+        private Double temperature = 0.3;
+
+        /**
+         * 是否参与调用，默认 true。
+         */
+        private Boolean enabled = true;
+
+        /**
+         * 推理开关：不设置（null、空白或 unset）时不发送该字段；
+         * disabled 关闭思考；enabled 打开思考。
+         */
+        private String thinking;
     }
 }

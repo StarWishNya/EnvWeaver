@@ -1,0 +1,15 @@
+{
+  "id": "kube-readiness-probe-timeout",
+  "description": "The kubelet readiness probe times out and a 503 from that probe is also written to the log.",
+  "log": "2026-04-08 19:02:11.004  INFO 512 --- [main] app.silo.picker.PickerApp : Starting picker on 10.244.1.36\n2026-04-08 19:02:12.440  INFO 512 --- [main] o.s.b.w.e.tomcat.TomcatWebServer : Tomcat started on port 8080 (http)\n2026-04-08 19:02:12.501  INFO 512 --- [main] app.silo.picker.PickerApp : Started picker in 2.9 seconds\n2026-04-08 19:02:12.880  INFO 512 --- [http-nio-8080-exec-1] a.s.picker.web.ReadyController : GET /ready 200\n2026-04-08 19:06:11.200  INFO 512 --- [http-nio-8080-exec-4] a.s.picker.web.PickController : GET /picks/queue 200\n2026-04-08 19:07:55.102  WARN 512 --- [http-nio-8080-exec-9] a.s.picker.web.ReadyController : aisle map still loading\n2026-04-08 19:07:56.000  WARN 1 --- [kubelet] k.probe : Readiness probe errored: Get \"http://10.244.1.36:8080/ready\": net/http: request canceled (Client.Timeout exceeded while awaiting headers)\n2026-04-08 19:07:56.040  WARN 1 --- [kubelet] k.probe : Readiness probe failed: HTTP probe failed with statuscode: 503\n2026-04-08 19:07:56.110 ERROR 512 --- [http-nio-8080-exec-9] a.s.picker.web.ReadyController : readiness write failed\njava.io.IOException: readiness downstream read failed\n\tat app.silo.picker.web.ReadyController.ready(ReadyController.java:31)\n\tat java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)\n\tat org.springframework.web.method.support.InvocableHandlerMethod.doInvoke(InvocableHandlerMethod.java:205)\nCaused by: java.net.SocketTimeoutException: Read timed out\n\tat java.base/sun.nio.ch.NioSocketImpl.timedRead(NioSocketImpl.java:288)\n\tat java.base/sun.nio.ch.NioSocketImpl.implRead(NioSocketImpl.java:314)\n\tat java.base/sun.nio.ch.NioSocketImpl.read(NioSocketImpl.java:355)\n\tat app.silo.picker.aisle.MapLoader.readBlock(MapLoader.java:77)\n\t... 3 more\n2026-04-08 19:08:01.004  INFO 512 --- [http-nio-8080-exec-3] a.s.picker.web.PickController : GET /picks/queue 200",
+  "expected": {
+    "errorType": "TIMEOUT",
+    "severity": "HIGH",
+    "rootCauseKeywords": [
+      "Client.Timeout exceeded",
+      "Readiness probe",
+      "健康检查",
+      "Read timed out"
+    ]
+  }
+}

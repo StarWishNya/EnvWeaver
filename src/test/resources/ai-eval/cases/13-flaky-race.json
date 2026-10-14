@@ -1,0 +1,15 @@
+{
+  "id": "flaky-race",
+  "description": "A previously passing test fails when two threads mutate the same inventory list.",
+  "log": "[INFO] Running com.acme.inventory.InventoryBoardTest\n2026-10-09T21:02:11.010Z  INFO  --- [main] com.acme.inventory.InventoryBoardTest : parallelRefreshIsStable attempt=1 threads=2\n2026-10-09T21:02:11.084Z  INFO  --- [main] com.acme.inventory.InventoryBoardTest : same method passed in the previous surefire run at 21:01:02\n2026-10-09T21:02:11.220Z  WARN  --- [pool-2-thread-1] com.acme.inventory.InventoryBoard : refresh replaced the snapshot while pool-2-thread-2 was iterating rows\n[ERROR] Tests run: 6, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.402 s <<< FAILURE! -- in com.acme.inventory.InventoryBoardTest\n[ERROR] com.acme.inventory.InventoryBoardTest.parallelRefreshIsStable -- Time elapsed: 0.318 s <<< FAILURE!\njava.util.ConcurrentModificationException\n    at java.base/java.util.ArrayList$Itr.checkForComodification(ArrayList.java:1013)\n    at java.base/java.util.ArrayList$Itr.next(ArrayList.java:967)\n    at com.acme.inventory.InventoryBoard.merge(InventoryBoard.java:128)\n    at com.acme.inventory.InventoryBoard.refresh(InventoryBoard.java:74)\n    at com.acme.inventory.InventoryBoardTest.lambda$parallelRefreshIsStable$1(InventoryBoardTest.java:71)\n    at java.base/java.util.concurrent.Executors$RunnableAdapter.call(Executors.java:539)\n    at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:264)\n    at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1136)\n    at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:635)\n    at java.base/java.lang.Thread.run(Thread.java:840)\n    Suppressed: java.util.ConcurrentModificationException\n        at java.base/java.util.ArrayList.sort(ArrayList.java:1747)\n        at com.acme.inventory.InventoryBoard.merge(InventoryBoard.java:131)\n        at com.acme.inventory.InventoryBoardTest.lambda$parallelRefreshIsStable$0(InventoryBoardTest.java:68)\n[ERROR] Failures:\n[ERROR]   InventoryBoardTest.parallelRefreshIsStable:74 » ConcurrentModification\n2026-10-09T21:02:11.340Z ERROR --- [main] com.acme.inventory.InventoryBoardTest : flaky failure: two refresh threads mutated the shared row list without synchronization\n[ERROR] Tests run: 6, Failures: 1, Errors: 0, Skipped: 0\n[INFO] BUILD FAILURE\n[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.2.3:test (default-test) on project inventory-core: There are test failures.\n[ERROR] com.acme.inventory.InventoryBoard.merge is not safe when refresh runs on two threads",
+  "expected": {
+    "errorType": "UNKNOWN",
+    "severity": "MEDIUM",
+    "rootCauseKeywords": [
+      "ConcurrentModification",
+      "竞态",
+      "并发",
+      "线程"
+    ]
+  }
+}

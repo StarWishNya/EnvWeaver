@@ -8,24 +8,33 @@ import com.sentinel.mapper.TaskMapper;
 import com.sentinel.service.TaskService;
 import com.sentinel.testutil.CreateTaskRequestBuilder;
 import com.sentinel.testutil.TaskBuilder;
+import com.sentinel.testutil.TestUtils;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.annotation.Rollback;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.transaction.AfterTransaction;
+import org.springframework.test.context.transaction.TestTransaction;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.*;
 
 /**
  * 数据库集成测试
- * 使用 H2 内存数据库测试数据访问层
+ * 连接测试 profile 的 MySQL。每个用例在事务内执行并在结束后回滚；
+ * 事务结束后再按主键删除本次插入的行，避免回滚未生效时污染 t_task。
+ * 插入使用唯一任务编码，断言只针对本用例写入的行。
  */
 @SpringBootTest
 @ActiveProfiles("test")
 @Transactional
+@Rollback
 @DisplayName("数据库集成测试")
 public class DatabaseIntegrationTest extends BaseTest {
 
@@ -35,18 +44,35 @@ public class DatabaseIntegrationTest extends BaseTest {
     @Autowired
     private TaskService taskService;
 
+    /** 本用例实例的任务编码后缀，t_task.task_code 唯一 */
+    private final String runToken = TestUtils.uniqueToken();
+
+    /** 本用例插入的主键，供回滚失败时清理 */
+    private final List<Long> insertedTaskIds = new ArrayList<>();
+
+    @AfterEach
+    public void deleteInsertedTasksBeforeRollback() {
+        deleteTrackedTasks();
+    }
+
+    @AfterTransaction
+    public void deleteInsertedTasksAfterRollback() {
+        deleteTrackedTasks();
+    }
+
     @Test
     @DisplayName("测试任务插入操作")
     public void shouldInsertTask_whenValidData() {
         // Given
         Task task = TaskBuilder.aTask()
-            .withTaskCode("DB-TEST-001")
+            .withTaskCode(taskCode("DB-TEST-001"))
             .withServiceId("test-service")
             .pending()
             .build();
 
         // When
         int result = taskMapper.insert(task);
+        remember(task);
 
         // Then
         assertThat(result).isEqualTo(1);
@@ -58,12 +84,12 @@ public class DatabaseIntegrationTest extends BaseTest {
     @DisplayName("测试任务查询操作")
     public void shouldSelectTask_whenTaskExists() {
         // Given
-        Task task = TaskBuilder.aTask()
-            .withTaskCode("DB-TEST-002")
+        String code = taskCode("DB-TEST-002");
+        Task task = insertTask(TaskBuilder.aTask()
+            .withTaskCode(code)
             .withServiceId("test-service")
             .pending()
-            .build();
-        taskMapper.insert(task);
+            .build());
 
         // When
         Task found = taskMapper.selectById(task.getId());
@@ -71,7 +97,7 @@ public class DatabaseIntegrationTest extends BaseTest {
         // Then
         assertThat(found).isNotNull();
         assertThat(found.getId()).isEqualTo(task.getId());
-        assertThat(found.getTaskCode()).isEqualTo("DB-TEST-002");
+        assertThat(found.getTaskCode()).isEqualTo(code);
         assertThat(found.getServiceId()).isEqualTo("test-service");
     }
 
@@ -79,11 +105,10 @@ public class DatabaseIntegrationTest extends BaseTest {
     @DisplayName("测试任务更新操作")
     public void shouldUpdateTask_whenTaskExists() {
         // Given
-        Task task = TaskBuilder.aTask()
-            .withTaskCode("DB-TEST-003")
+        Task task = insertTask(TaskBuilder.aTask()
+            .withTaskCode(taskCode("DB-TEST-003"))
             .pending()
-            .build();
-        taskMapper.insert(task);
+            .build());
 
         // When
         task.setStatus("RUNNING");
@@ -99,11 +124,10 @@ public class DatabaseIntegrationTest extends BaseTest {
     @DisplayName("测试任务删除操作")
     public void shouldDeleteTask_whenTaskExists() {
         // Given
-        Task task = TaskBuilder.aTask()
-            .withTaskCode("DB-TEST-004")
+        Task task = insertTask(TaskBuilder.aTask()
+            .withTaskCode(taskCode("DB-TEST-004"))
             .pending()
-            .build();
-        taskMapper.insert(task);
+            .build());
 
         // When
         int result = taskMapper.deleteById(task.getId());
@@ -118,41 +142,49 @@ public class DatabaseIntegrationTest extends BaseTest {
     @DisplayName("测试根据状态查询任务列表")
     public void shouldFindTasksByStatus_whenTasksExist() {
         // Given
-        Task task1 = TaskBuilder.aTask().withTaskCode("DB-TEST-005").pending().build();
-        Task task2 = TaskBuilder.aTask().withTaskCode("DB-TEST-006").pending().build();
-        Task task3 = TaskBuilder.aTask().withTaskCode("DB-TEST-007").running().build();
-        
-        taskMapper.insert(task1);
-        taskMapper.insert(task2);
-        taskMapper.insert(task3);
+        String pendingCode1 = taskCode("DB-TEST-005");
+        String pendingCode2 = taskCode("DB-TEST-006");
+        String runningCode = taskCode("DB-TEST-007");
+        insertTask(TaskBuilder.aTask().withTaskCode(pendingCode1).pending().build());
+        insertTask(TaskBuilder.aTask().withTaskCode(pendingCode2).pending().build());
+        Task runningTask = insertTask(TaskBuilder.aTask().withTaskCode(runningCode).running().build());
 
         // When
         List<Task> pendingTasks = taskMapper.findByStatus("PENDING");
 
-        // Then
-        assertThat(pendingTasks).hasSize(2);
-        assertThat(pendingTasks).allMatch(task -> "PENDING".equals(task.getStatus()));
+        // Then：只断言本用例插入的行，不依赖库中已有的 PENDING 数量
+        List<Task> insertedPending = pendingTasks.stream()
+            .filter(task -> pendingCode1.equals(task.getTaskCode()) || pendingCode2.equals(task.getTaskCode()))
+            .toList();
+        assertThat(insertedPending).hasSize(2);
+        assertThat(insertedPending).allMatch(task -> "PENDING".equals(task.getStatus()));
+        assertThat(pendingTasks).extracting(Task::getTaskCode).doesNotContain(runningCode);
+
+        Task storedRunning = taskMapper.selectById(runningTask.getId());
+        assertThat(storedRunning).isNotNull();
+        assertThat(storedRunning.getTaskCode()).isEqualTo(runningCode);
+        assertThat(storedRunning.getStatus()).isEqualTo("RUNNING");
     }
 
     @Test
     @DisplayName("测试分页查询任务列表")
     public void shouldSelectTaskPage_whenTasksExist() {
         // Given
+        long totalBefore = taskService.listTasks(0, 1, null, null).getTotal();
+        List<String> codes = new ArrayList<>();
         for (int i = 1; i <= 15; i++) {
-            Task task = TaskBuilder.aTask()
-                .withTaskCode("DB-TEST-PAGE-" + i)
-                .pending()
-                .build();
-            taskMapper.insert(task);
+            String code = taskCode("DB-TEST-PAGE-" + i);
+            codes.add(code);
+            insertTask(TaskBuilder.aTask().withTaskCode(code).pending().build());
         }
 
         // When
-        IPage<Task> page = taskService.listTasks(1, 10, null);
+        IPage<Task> page = taskService.listTasks(0, 10, null, null);
 
         // Then
         assertThat(page).isNotNull();
         assertThat(page.getRecords()).hasSize(10);
-        assertThat(page.getTotal()).isGreaterThanOrEqualTo(15);
+        assertThat(page.getTotal()).isEqualTo(totalBefore + codes.size());
         assertThat(page.getCurrent()).isEqualTo(1);
         assertThat(page.getSize()).isEqualTo(10);
     }
@@ -161,19 +193,21 @@ public class DatabaseIntegrationTest extends BaseTest {
     @DisplayName("测试分页查询第二页")
     public void shouldSelectSecondPage_whenMultiplePagesExist() {
         // Given
-        for (int i = 1; i <= 25; i++) {
-            Task task = TaskBuilder.aTask()
-                .withTaskCode("DB-TEST-PAGE2-" + i)
+        long totalBefore = taskService.listTasks(0, 1, null, null).getTotal();
+        int inserted = 25;
+        for (int i = 1; i <= inserted; i++) {
+            insertTask(TaskBuilder.aTask()
+                .withTaskCode(taskCode("DB-TEST-PAGE2-" + i))
                 .pending()
-                .build();
-            taskMapper.insert(task);
+                .build());
         }
 
         // When
-        IPage<Task> page = taskService.listTasks(2, 10, null);
+        IPage<Task> page = taskService.listTasks(1, 10, null, null);
 
         // Then
         assertThat(page).isNotNull();
+        assertThat(page.getTotal()).isEqualTo(totalBefore + inserted);
         assertThat(page.getRecords()).hasSize(10);
         assertThat(page.getCurrent()).isEqualTo(2);
     }
@@ -182,22 +216,27 @@ public class DatabaseIntegrationTest extends BaseTest {
     @DisplayName("测试事务回滚")
     public void shouldRollbackTransaction_whenExceptionOccurs() {
         // Given
-        Task task = TaskBuilder.aTask()
-            .withTaskCode("DB-TEST-ROLLBACK")
+        assertThat(TestTransaction.isActive()).isTrue();
+        Task task = insertTask(TaskBuilder.aTask()
+            .withTaskCode(taskCode("DB-TEST-ROLLBACK"))
             .pending()
-            .build();
+            .build());
+        Long taskId = task.getId();
+        assertThat(taskMapper.selectById(taskId)).isNotNull();
 
-        // When
+        // When：用例内部异常被吞掉，仍应回滚未提交的插入
         try {
-            taskMapper.insert(task);
-            // 模拟异常
             throw new RuntimeException("Test exception");
-        } catch (RuntimeException e) {
-            // 事务应该回滚
+        } catch (RuntimeException ex) {
+            assertThat(ex).hasMessage("Test exception");
         }
 
-        // Then - 由于@Transactional，任务不应该被保存
-        // 注意：在测试方法级别的@Transactional会在方法结束后自动回滚
+        TestTransaction.flagForRollback();
+        TestTransaction.end();
+        TestTransaction.start();
+
+        // Then
+        assertThat(taskMapper.selectById(taskId)).isNull();
     }
 
     @Test
@@ -205,20 +244,21 @@ public class DatabaseIntegrationTest extends BaseTest {
     public void shouldPersistTask_whenCreatedThroughService() {
         // Given
         CreateTaskRequest request = CreateTaskRequestBuilder.aCreateTaskRequest()
-            .withTaskCode("DB-TEST-SERVICE-001")
+            .withTaskCode(taskCode("DB-TEST-SERVICE-001"))
             .withServiceId("test-service")
             .unitTest()
             .build();
 
         // When
         Task created = taskService.createTask(request);
+        remember(created);
 
         // Then
         assertThat(created.getId()).isNotNull();
-        
+
         Task found = taskMapper.selectById(created.getId());
         assertThat(found).isNotNull();
-        assertThat(found.getTaskCode()).isEqualTo("DB-TEST-SERVICE-001");
+        assertThat(found.getTaskCode()).isEqualTo(request.getTaskCode());
         assertThat(found.getStatus()).isEqualTo("PENDING");
     }
 
@@ -227,10 +267,11 @@ public class DatabaseIntegrationTest extends BaseTest {
     public void shouldUpdateTaskStatus_whenUpdatedThroughService() {
         // Given
         CreateTaskRequest request = CreateTaskRequestBuilder.aCreateTaskRequest()
-            .withTaskCode("DB-TEST-SERVICE-002")
+            .withTaskCode(taskCode("DB-TEST-SERVICE-002"))
             .unitTest()
             .build();
         Task created = taskService.createTask(request);
+        remember(created);
 
         // When
         taskService.updateTaskStatus(created.getId(), "RUNNING");
@@ -246,12 +287,14 @@ public class DatabaseIntegrationTest extends BaseTest {
     public void shouldAutoFillTimestamps_whenInsertTask() {
         // Given
         Task task = TaskBuilder.aTask()
-            .withTaskCode("DB-TEST-AUTOFILL")
+            .withTaskCode(taskCode("DB-TEST-AUTOFILL"))
             .pending()
             .build();
+        task.setCreatedAt(null);
+        task.setUpdatedAt(null);
 
         // When
-        taskMapper.insert(task);
+        insertTask(task);
 
         // Then
         Task found = taskMapper.selectById(task.getId());
@@ -262,8 +305,8 @@ public class DatabaseIntegrationTest extends BaseTest {
     @Test
     @DisplayName("测试查询不存在的任务")
     public void shouldReturnNull_whenTaskNotExists() {
-        // When
-        Task found = taskMapper.selectById(99999L);
+        // When：自增主键不会是负数，避免与已有行碰撞
+        Task found = taskMapper.selectById(-1L);
 
         // Then
         assertThat(found).isNull();
@@ -273,59 +316,82 @@ public class DatabaseIntegrationTest extends BaseTest {
     @DisplayName("测试批量插入任务")
     public void shouldInsertMultipleTasks_whenBatchInsert() {
         // Given & When
+        List<String> codes = new ArrayList<>();
         for (int i = 1; i <= 5; i++) {
-            Task task = TaskBuilder.aTask()
-                .withTaskCode("DB-TEST-BATCH-" + i)
-                .pending()
-                .build();
-            taskMapper.insert(task);
+            String code = taskCode("DB-TEST-BATCH-" + i);
+            codes.add(code);
+            insertTask(TaskBuilder.aTask().withTaskCode(code).pending().build());
         }
 
         // Then
-        List<Task> allTasks = taskMapper.findByStatus("PENDING");
-        assertThat(allTasks.size()).isGreaterThanOrEqualTo(5);
+        List<Task> pendingTasks = taskMapper.findByStatus("PENDING");
+        List<Task> inserted = pendingTasks.stream()
+            .filter(task -> codes.contains(task.getTaskCode()))
+            .toList();
+        assertThat(inserted).hasSize(codes.size());
+        assertThat(inserted).allMatch(task -> "PENDING".equals(task.getStatus()));
     }
 
     @Test
     @DisplayName("测试任务优先级排序")
     public void shouldOrderByPriority_whenQueryByStatus() {
         // Given
-        Task lowPriority = TaskBuilder.aTask()
-            .withTaskCode("DB-TEST-PRIORITY-LOW")
+        String lowCode = taskCode("DB-TEST-PRIORITY-LOW");
+        String highCode = taskCode("DB-TEST-PRIORITY-HIGH");
+        insertTask(TaskBuilder.aTask()
+            .withTaskCode(lowCode)
             .withPriority(1)
             .pending()
-            .build();
-        
-        Task highPriority = TaskBuilder.aTask()
-            .withTaskCode("DB-TEST-PRIORITY-HIGH")
+            .build());
+        insertTask(TaskBuilder.aTask()
+            .withTaskCode(highCode)
             .withPriority(10)
             .pending()
-            .build();
-        
-        taskMapper.insert(lowPriority);
-        taskMapper.insert(highPriority);
+            .build());
 
         // When
         List<Task> tasks = taskMapper.findByStatus("PENDING");
 
-        // Then
-        assertThat(tasks).isNotEmpty();
-        // 验证按优先级降序排列（高优先级在前）
-        if (tasks.size() >= 2) {
-            Task first = tasks.stream()
-                .filter(t -> t.getTaskCode().equals("DB-TEST-PRIORITY-HIGH"))
-                .findFirst()
-                .orElse(null);
-            Task second = tasks.stream()
-                .filter(t -> t.getTaskCode().equals("DB-TEST-PRIORITY-LOW"))
-                .findFirst()
-                .orElse(null);
-            
-            if (first != null && second != null) {
-                int firstIndex = tasks.indexOf(first);
-                int secondIndex = tasks.indexOf(second);
-                assertThat(firstIndex).isLessThan(secondIndex);
+        // Then：高优先级排在低优先级之前，不受库中其他 PENDING 行影响
+        int highIndex = indexOfTaskCode(tasks, highCode);
+        int lowIndex = indexOfTaskCode(tasks, lowCode);
+        assertThat(highIndex).isGreaterThanOrEqualTo(0);
+        assertThat(lowIndex).isGreaterThanOrEqualTo(0);
+        assertThat(highIndex).isLessThan(lowIndex);
+    }
+
+    private String taskCode(String base) {
+        String code = base + "-" + runToken;
+        if (code.length() > 64) {
+            throw new IllegalArgumentException("task_code exceeds 64 chars: " + code);
+        }
+        return code;
+    }
+
+    private Task insertTask(Task task) {
+        int result = taskMapper.insert(task);
+        assertThat(result).isEqualTo(1);
+        remember(task);
+        return task;
+    }
+
+    private void remember(Task task) {
+        assertThat(task.getId()).isNotNull();
+        insertedTaskIds.add(task.getId());
+    }
+
+    private void deleteTrackedTasks() {
+        for (Long taskId : new ArrayList<>(insertedTaskIds)) {
+            taskMapper.deleteById(taskId);
+        }
+    }
+
+    private int indexOfTaskCode(List<Task> tasks, String code) {
+        for (int i = 0; i < tasks.size(); i++) {
+            if (code.equals(tasks.get(i).getTaskCode())) {
+                return i;
             }
         }
+        return -1;
     }
 }

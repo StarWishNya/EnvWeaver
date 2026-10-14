@@ -1,0 +1,15 @@
+{
+  "id": "netty-peer-name-mismatch",
+  "description": "A Netty WebClient rejects a TLS session because the certificate has no DNS name for the requested host.",
+  "log": "2026-03-02 14:22:08.004  INFO 9021 --- [main] io.northwind.catalog.CatalogApp : Starting catalog on 10.2.18.7\n2026-03-02 14:22:09.441  INFO 9021 --- [main] o.s.b.w.e.netty.NettyWebServer : Netty started on port 9094\n2026-03-02 14:22:09.502  INFO 9021 --- [main] io.northwind.catalog.CatalogApp : Started catalog in 3.1 seconds\n2026-03-02 14:22:40.100  INFO 9021 --- [reactor-http-nio-2] i.n.catalog.web.SearchController : GET /search q=cedar 200\n2026-03-02 14:23:41.880  INFO 9021 --- [reactor-http-nio-3] i.n.catalog.client.SkuClient : GET https://sku.northwind.io/v2/items/8841\n2026-03-02 14:23:41.993 ERROR 9021 --- [reactor-http-nio-3] i.n.catalog.client.SkuClient : TLS setup failed for sku.northwind.io\njavax.net.ssl.SSLHandshakeException: General OpenSslEngine problem\n\tat io.netty.handler.ssl.ReferenceCountedOpenSslEngine.handshakeException(ReferenceCountedOpenSslEngine.java:1895)\n\tat io.netty.handler.ssl.ReferenceCountedOpenSslEngine.wrap(ReferenceCountedOpenSslEngine.java:1228)\n\tat io.netty.handler.ssl.SslHandler.wrap(SslHandler.java:1176)\n\tat io.netty.handler.ssl.SslHandler.handshake(SslHandler.java:1894)\n\tat reactor.netty.tcp.SslProvider$SslReadHandler.channelActive(SslProvider.java:641)\n\tat io.northwind.catalog.client.SkuClient.fetch(SkuClient.java:58)\nCaused by: java.security.cert.CertificateException: No subject alternative DNS name matching sku.northwind.io found.\n\tat sun.security.util.HostnameChecker.matchDNS(HostnameChecker.java:207)\n\tat sun.security.util.HostnameChecker.match(HostnameChecker.java:100)\n\tat sun.security.ssl.X509TrustManagerImpl.checkIdentity(X509TrustManagerImpl.java:462)\n\tat sun.security.ssl.X509TrustManagerImpl.checkServerTrusted(X509TrustManagerImpl.java:144)\n\tat io.netty.handler.ssl.ReferenceCountedOpenSslClientContext$ExtendedTrustManagerVerifyCallback.verify(ReferenceCountedOpenSslClientContext.java:249)\n\t... 6 more\n2026-03-02 14:23:42.010  WARN 9021 --- [reactor-http-nio-3] i.n.catalog.web.ItemController : sku 8841 lookup failed",
+  "expected": {
+    "errorType": "CONFIG_ERROR",
+    "severity": "HIGH",
+    "rootCauseKeywords": [
+      "CertificateException",
+      "No subject alternative DNS name",
+      "主机名",
+      "SSLHandshakeException"
+    ]
+  }
+}

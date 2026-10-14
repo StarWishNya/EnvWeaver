@@ -5,16 +5,28 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sentinel.domain.Task;
 import com.sentinel.dto.CreateTaskRequest;
+import com.sentinel.dto.TaskLogsResponse;
+import com.sentinel.dto.TaskStatusResponse;
+import com.sentinel.enums.ErrorCode;
+import com.sentinel.service.ContainerLogWindow;
 import com.sentinel.config.BusinessException;
 import com.sentinel.config.GlobalExceptionHandler;
+import com.sentinel.config.JwtAuthenticationFilter;
+import com.sentinel.config.SecurityConfig;
+import com.sentinel.config.properties.SecurityProperties;
+import com.sentinel.mapper.UserMapper;
+import com.sentinel.service.CacheService;
+import com.sentinel.service.UserDetailsServiceImpl;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
 import com.sentinel.service.TaskService;
 import com.sentinel.util.JwtUtil;
-import com.sentinel.config.JwtAuthenticationFilter;
 import com.sentinel.testutil.CreateTaskRequestBuilder;
 import com.sentinel.testutil.TaskBuilder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -23,9 +35,13 @@ import org.springframework.http.MediaType;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.LocalDateTime;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
+import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
@@ -37,8 +53,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 测试任务管理相关的所有接口
  */
 @WebMvcTest(TaskController.class)
-@AutoConfigureMockMvc(addFilters = false)
-@Import(GlobalExceptionHandler.class)
+@AutoConfigureMockMvc(addFilters = true)
+@Import({GlobalExceptionHandler.class, SecurityConfig.class, JwtAuthenticationFilter.class})
+@EnableConfigurationProperties(SecurityProperties.class)
 @DisplayName("TaskController 测试")
 public class TaskControllerTest {
 
@@ -55,7 +72,13 @@ public class TaskControllerTest {
     private JwtUtil jwtUtil;
 
     @MockBean
-    private JwtAuthenticationFilter jwtAuthenticationFilter;
+    private CacheService cacheService;
+
+    @MockBean
+    private UserMapper userMapper;
+
+    @MockBean
+    private UserDetailsServiceImpl userDetailsService;
 
     @Test
     @WithMockUser
@@ -82,12 +105,14 @@ public class TaskControllerTest {
                 .with(csrf())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.code").value(200))
                 .andExpect(jsonPath("$.data.id").value(1))
                 .andExpect(jsonPath("$.data.taskCode").value("TEST-001"))
                 .andExpect(jsonPath("$.data.serviceId").value("user-service"))
-                .andExpect(jsonPath("$.data.status").value("PENDING"));
+                .andExpect(jsonPath("$.data.status").value("PENDING"))
+                .andExpect(jsonPath("$.data.dependencies").isArray())
+                .andExpect(jsonPath("$.data.dependencies[0]").value("mysql:8.0"));
 
         verify(taskService, times(1)).createTask(any(CreateTaskRequest.class));
     }
@@ -148,7 +173,7 @@ public class TaskControllerTest {
         // When & Then
         mockMvc.perform(get("/api/tasks/{taskId}", taskId)
                 .with(csrf()))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(2001))
                 .andExpect(jsonPath("$.message").value("任务不存在"));
 
@@ -167,20 +192,23 @@ public class TaskControllerTest {
         page.setRecords(Arrays.asList(task1, task2));
         page.setTotal(2);
 
-        when(taskService.listTasks(1, 10, null)).thenReturn(page);
+        when(taskService.listTasks(0, 10, null, null)).thenReturn(page);
 
         // When & Then
         mockMvc.perform(get("/api/tasks")
                 .with(csrf())
-                .param("pageNum", "1")
-                .param("pageSize", "10"))
+                .param("page", "0")
+                .param("size", "10"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
-                .andExpect(jsonPath("$.data.records").isArray())
-                .andExpect(jsonPath("$.data.records.length()").value(2))
-                .andExpect(jsonPath("$.data.total").value(2));
+                .andExpect(jsonPath("$.data.content").isArray())
+                .andExpect(jsonPath("$.data.content.length()").value(2))
+                .andExpect(jsonPath("$.data.page").value(0))
+                .andExpect(jsonPath("$.data.size").value(10))
+                .andExpect(jsonPath("$.data.totalElements").value(2))
+                .andExpect(jsonPath("$.data.totalPages").value(1));
 
-        verify(taskService, times(1)).listTasks(1, 10, null);
+        verify(taskService, times(1)).listTasks(0, 10, null, null);
     }
 
     @Test
@@ -195,20 +223,22 @@ public class TaskControllerTest {
         page.setRecords(Arrays.asList(task1, task2));
         page.setTotal(2);
 
-        when(taskService.listTasks(1, 10, "RUNNING")).thenReturn(page);
+        when(taskService.listTasks(0, 10, "RUNNING", "INTEGRATION_TEST")).thenReturn(page);
 
         // When & Then
         mockMvc.perform(get("/api/tasks")
                 .with(csrf())
-                .param("pageNum", "1")
-                .param("pageSize", "10")
-                .param("status", "RUNNING"))
+                .param("page", "0")
+                .param("size", "10")
+                .param("status", "RUNNING")
+                .param("testType", "INTEGRATION_TEST"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
-                .andExpect(jsonPath("$.data.records").isArray())
-                .andExpect(jsonPath("$.data.total").value(2));
+                .andExpect(jsonPath("$.data.content").isArray())
+                .andExpect(jsonPath("$.data.totalElements").value(2))
+                .andExpect(jsonPath("$.data.content[0].status").value("RUNNING"));
 
-        verify(taskService, times(1)).listTasks(1, 10, "RUNNING");
+        verify(taskService, times(1)).listTasks(0, 10, "RUNNING", "INTEGRATION_TEST");
     }
 
     @Test
@@ -253,6 +283,19 @@ public class TaskControllerTest {
 
     @Test
     @WithMockUser
+    @DisplayName("DELETE 取消与并发状态变更冲突时返回 409")
+    public void shouldReturnConflictWhenDeleteLosesRace() throws Exception {
+        doThrow(new BusinessException(ErrorCode.TASK_STATUS_CONFLICT))
+                .when(taskService).cancelTask(3L);
+
+        mockMvc.perform(delete("/api/tasks/{taskId}", 3L).with(csrf()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value(2006))
+                .andExpect(jsonPath("$.message").value("任务状态已被并发修改，请重试"));
+    }
+
+    @Test
+    @WithMockUser
     @DisplayName("测试取消任务失败 - 任务已完成")
     public void shouldReturnError_whenCancelCompletedTask() throws Exception {
         // Given
@@ -290,18 +333,39 @@ public class TaskControllerTest {
     }
 
     @Test
+    @WithMockUser(roles = "ADMIN")
+    @DisplayName("更新状态与并发修改冲突时返回 409")
+    public void shouldReturnConflictWhenStatusUpdateLosesRace() throws Exception {
+        doThrow(new BusinessException(ErrorCode.TASK_STATUS_CONFLICT))
+                .when(taskService).updateTaskStatus(8L, "SUCCESS");
+
+        mockMvc.perform(put("/api/tasks/{taskId}/status", 8L)
+                        .with(csrf())
+                        .param("status", "SUCCESS"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value(2006))
+                .andExpect(jsonPath("$.message").value("任务状态已被并发修改，请重试"));
+    }
+
+    @Test
+    @DisplayName("更新任务状态无令牌时返回 401")
+    public void shouldReturnUnauthorized_whenUpdateStatusWithoutToken() throws Exception {
+        mockMvc.perform(put("/api/tasks/{taskId}/status", 1L)
+                        .param("status", "RUNNING"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(1001))
+                .andExpect(jsonPath("$.message").value("未授权，请先登录"));
+
+        verify(taskService, never()).updateTaskStatus(anyLong(), anyString());
+    }
+
+    @Test
     @WithMockUser(roles = "USER")
     @DisplayName("测试更新任务状态失败 - 非管理员权限")
-    @org.junit.jupiter.api.Disabled("需要启用 Security 过滤器才能测试权限控制")
     public void shouldReturnForbidden_whenUserIsNotAdmin() throws Exception {
-        // Given
-        Long taskId = 1L;
-        String newStatus = "RUNNING";
-
-        // When & Then
-        mockMvc.perform(put("/api/tasks/{taskId}/status", taskId)
-                .with(csrf())
-                .param("status", newStatus))
+        mockMvc.perform(put("/api/tasks/{taskId}/status", 1L)
+                        .with(csrf())
+                        .param("status", "RUNNING"))
                 .andExpect(status().isForbidden());
 
         verify(taskService, never()).updateTaskStatus(anyLong(), anyString());
@@ -312,19 +376,24 @@ public class TaskControllerTest {
     @DisplayName("测试分页参数默认值")
     public void shouldUseDefaultPaginationParams_whenNotProvided() throws Exception {
         // Given
-        IPage<Task> page = new Page<>(1, 10);
+        IPage<Task> page = new Page<>(1, 20);
         page.setRecords(Arrays.asList());
         page.setTotal(0);
 
-        when(taskService.listTasks(1, 10, null)).thenReturn(page);
+        when(taskService.listTasks(0, 20, null, null)).thenReturn(page);
 
         // When & Then
         mockMvc.perform(get("/api/tasks")
                 .with(csrf()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value(200));
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.page").value(0))
+                .andExpect(jsonPath("$.data.size").value(20))
+                .andExpect(jsonPath("$.data.content").isArray())
+                .andExpect(jsonPath("$.data.totalElements").value(0))
+                .andExpect(jsonPath("$.data.totalPages").value(0));
 
-        verify(taskService, times(1)).listTasks(1, 10, null);
+        verify(taskService, times(1)).listTasks(0, 20, null, null);
     }
 
     @Test
@@ -355,6 +424,409 @@ public class TaskControllerTest {
                 .andExpect(jsonPath("$.data.serviceId").isString())
                 .andExpect(jsonPath("$.data.testType").isString())
                 .andExpect(jsonPath("$.data.status").isString())
-                .andExpect(jsonPath("$.data.priority").isNumber());
+                .andExpect(jsonPath("$.data.priority").isNumber())
+                .andExpect(jsonPath("$.data.dependencies").isArray())
+                .andExpect(jsonPath("$.data.updatedAt").doesNotExist());
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("非法分页参数返回 400")
+    public void shouldRejectNonPositivePagination() throws Exception {
+        mockMvc.perform(get("/api/tasks")
+                        .with(csrf())
+                        .param("page", "-1")
+                        .param("size", "10"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value(TaskService.PAGE_NEGATIVE_MESSAGE));
+
+        mockMvc.perform(get("/api/tasks")
+                        .with(csrf())
+                        .param("page", "0")
+                        .param("size", "0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value(TaskService.PAGE_SIZE_MESSAGE));
+
+        mockMvc.perform(get("/api/tasks")
+                        .with(csrf())
+                        .param("size", "501"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value(TaskService.PAGE_SIZE_MESSAGE));
+
+        mockMvc.perform(get("/api/tasks")
+                        .with(csrf())
+                        .param("status", "NOPE"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(TaskService.STATUS_FILTER_MESSAGE));
+
+        mockMvc.perform(get("/api/tasks")
+                        .with(csrf())
+                        .param("testType", "WEIRD"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(TaskService.TEST_TYPE_FILTER_MESSAGE));
+
+        verify(taskService, never()).listTasks(anyInt(), anyInt(), any(), any());
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("任务 ID 不是数字时返回 400")
+    public void shouldReturnBadRequest_whenTaskIdIsNotNumeric() throws Exception {
+        mockMvc.perform(get("/api/tasks/{taskId}", "abc").with(csrf()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value("请求参数错误"));
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("不支持的方法返回 405")
+    public void shouldReturnMethodNotAllowed_whenPatchTask() throws Exception {
+        mockMvc.perform(patch("/api/tasks/{taskId}", 1L).with(csrf()))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(jsonPath("$.code").value(5007))
+                .andExpect(jsonPath("$.message").value("不支持的请求方法"));
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("DELETE 取消任务成功")
+    public void shouldCancelTask_whenDelete() throws Exception {
+        doNothing().when(taskService).cancelTask(3L);
+
+        mockMvc.perform(delete("/api/tasks/{taskId}", 3L).with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.message").value("任务已取消"));
+
+        verify(taskService).cancelTask(3L);
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("DELETE 取消已结束任务返回 400")
+    public void shouldRejectDeleteWhenTaskFinished() throws Exception {
+        doThrow(new BusinessException(ErrorCode.OPERATION_NOT_ALLOWED, "任务已完成，无法取消"))
+                .when(taskService).cancelTask(3L);
+
+        mockMvc.perform(delete("/api/tasks/{taskId}", 3L).with(csrf()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5007))
+                .andExpect(jsonPath("$.message").value("任务已完成，无法取消"));
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("DELETE 取消不存在的任务返回 404")
+    public void shouldReturnNotFoundWhenDeleteMissingTask() throws Exception {
+        doThrow(new BusinessException(ErrorCode.TASK_NOT_FOUND))
+                .when(taskService).cancelTask(9L);
+
+        mockMvc.perform(delete("/api/tasks/{taskId}", 9L).with(csrf()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value(2001))
+                .andExpect(jsonPath("$.message").value("任务不存在"));
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("更新状态缺少 status 参数返回 400")
+    public void shouldReturnBadRequest_whenStatusParamMissing() throws Exception {
+        mockMvc.perform(put("/api/tasks/{taskId}/status", 1L).with(csrf()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value("请求参数错误"));
+
+        verify(taskService, never()).updateTaskStatus(anyLong(), anyString());
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("重复任务编码返回 400")
+    public void shouldReturnBadRequest_whenTaskCodeDuplicated() throws Exception {
+        when(taskService.createTask(any())).thenThrow(new DuplicateKeyException("dup"));
+        CreateTaskRequest request = CreateTaskRequestBuilder.aCreateTaskRequest().build();
+
+        mockMvc.perform(post("/api/tasks")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5006))
+                .andExpect(jsonPath("$.message").value("资源已存在"));
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("数据约束失败返回 400 且不暴露 SQL")
+    public void shouldReturnBadRequest_whenDataIntegrityViolated() throws Exception {
+        when(taskService.createTask(any())).thenThrow(new DataIntegrityViolationException("bad sql"));
+        CreateTaskRequest request = CreateTaskRequestBuilder.aCreateTaskRequest().build();
+
+        mockMvc.perform(post("/api/tasks")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value("请求数据不符合约束"))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("sql"))));
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("超长编码、非法类型或越界优先级返回 400")
+    public void shouldRejectOversizedOrIllegalCreateFields() throws Exception {
+        CreateTaskRequest request = CreateTaskRequestBuilder.aCreateTaskRequest()
+                .withTaskCode("T".repeat(65))
+                .withTestType("WEIRD")
+                .withPriority(0)
+                .build();
+
+        mockMvc.perform(post("/api/tasks")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.data.taskCode").value("任务编码长度不能超过64"))
+                .andExpect(jsonPath("$.data.testType").value("测试类型不合法"))
+                .andExpect(jsonPath("$.data.priority").value("优先级必须在1到10之间"));
+
+        verify(taskService, never()).createTask(any());
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("获取任务状态返回 taskId、status 和 progress")
+    public void shouldReturnTaskStatus() throws Exception {
+        TaskStatusResponse status = new TaskStatusResponse();
+        status.setTaskId(8L);
+        status.setStatus("RUNNING");
+        status.setProgress(50);
+        when(taskService.getTaskStatus(8L)).thenReturn(status);
+
+        mockMvc.perform(get("/api/tasks/{taskId}/status", 8L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.taskId").value(8))
+                .andExpect(jsonPath("$.data.status").value("RUNNING"))
+                .andExpect(jsonPath("$.data.progress").value(50));
+
+        verify(taskService).getTaskStatus(8L);
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("任务状态不存在时返回 404")
+    public void shouldReturnNotFoundWhenTaskStatusMissing() throws Exception {
+        when(taskService.getTaskStatus(9L)).thenThrow(new BusinessException(ErrorCode.TASK_NOT_FOUND));
+
+        mockMvc.perform(get("/api/tasks/{taskId}/status", 9L))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value(2001))
+                .andExpect(jsonPath("$.message").value("任务不存在"));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    @DisplayName("按状态列表、单任务状态和更新状态路径不冲突")
+    public void statusRoutesDoNotClash() throws Exception {
+        when(taskService.listTasksByStatus("RUNNING")).thenReturn(List.of());
+        TaskStatusResponse status = new TaskStatusResponse();
+        status.setTaskId(8L);
+        status.setStatus("QUEUED");
+        status.setProgress(10);
+        when(taskService.getTaskStatus(8L)).thenReturn(status);
+
+        mockMvc.perform(get("/api/tasks/status/{status}", "RUNNING"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isArray());
+
+        mockMvc.perform(get("/api/tasks/{taskId}/status", 8L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.taskId").value(8))
+                .andExpect(jsonPath("$.data.progress").value(10));
+
+        mockMvc.perform(put("/api/tasks/{taskId}/status", 8L)
+                        .with(csrf())
+                        .param("status", "SUCCESS"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("任务状态已更新"));
+
+        verify(taskService).listTasksByStatus("RUNNING");
+        verify(taskService).getTaskStatus(8L);
+        verify(taskService).updateTaskStatus(8L, "SUCCESS");
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("获取任务日志返回 logs 和 hasMore，默认 tail 为 100")
+    public void shouldReturnTaskLogs() throws Exception {
+        TaskLogsResponse logs = new TaskLogsResponse();
+        logs.setLogs("--- container mysql ---\nready");
+        logs.setHasMore(false);
+        when(taskService.getTaskLogs(4L, 100, null)).thenReturn(logs);
+
+        mockMvc.perform(get("/api/tasks/{taskId}/logs", 4L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.logs").value("--- container mysql ---\nready"))
+                .andExpect(jsonPath("$.data.hasMore").value(false));
+
+        verify(taskService).getTaskLogs(4L, 100, null);
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("任务日志不存在时返回 404")
+    public void shouldReturnNotFoundWhenTaskLogsMissing() throws Exception {
+        when(taskService.getTaskLogs(eq(9L), eq(100), isNull()))
+                .thenThrow(new BusinessException(ErrorCode.TASK_NOT_FOUND));
+
+        mockMvc.perform(get("/api/tasks/{taskId}/logs", 9L))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value(2001))
+                .andExpect(jsonPath("$.message").value("任务不存在"));
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("tail 超出 1 到 5000 时返回 400")
+    public void shouldRejectTailOutOfRange() throws Exception {
+        mockMvc.perform(get("/api/tasks/{taskId}/logs", 1L).param("tail", "0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value(ContainerLogWindow.TAIL_RANGE_MESSAGE));
+
+        mockMvc.perform(get("/api/tasks/{taskId}/logs", 1L).param("tail", "5001"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value(ContainerLogWindow.TAIL_RANGE_MESSAGE));
+
+        mockMvc.perform(get("/api/tasks/{taskId}/logs", 1L).param("tail", "abc"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004));
+
+        verify(taskService, never()).getTaskLogs(anyLong(), anyInt(), any());
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("非法 since 返回 400，合法 since 传给服务")
+    public void shouldRejectBadSinceAndPassValidSince() throws Exception {
+        mockMvc.perform(get("/api/tasks/{taskId}/logs", 1L).param("since", "yesterday"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value(ContainerLogWindow.SINCE_FORMAT_MESSAGE));
+
+        TaskLogsResponse logs = new TaskLogsResponse();
+        logs.setLogs("");
+        logs.setHasMore(true);
+        when(taskService.getTaskLogs(1L, 20, "2026-10-09T08:00:00Z")).thenReturn(logs);
+
+        mockMvc.perform(get("/api/tasks/{taskId}/logs", 1L)
+                        .param("tail", "20")
+                        .param("since", "2026-10-09T08:00:00Z"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.logs").value(""))
+                .andExpect(jsonPath("$.data.hasMore").value(true));
+
+        verify(taskService, never()).getTaskLogs(eq(1L), anyInt(), eq("yesterday"));
+        verify(taskService).getTaskLogs(1L, 20, "2026-10-09T08:00:00Z");
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("创建任务把模板原样交给服务")
+    public void shouldPassTemplateToService() throws Exception {
+        Task task = TaskBuilder.aTask().withId(3L).withTaskCode("TPL-1").pending().build();
+        when(taskService.createTask(any())).thenReturn(task);
+
+        mockMvc.perform(post("/api/tasks")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"taskCode\":\"TPL-1\",\"serviceId\":\"svc\",\"testType\":\"UNIT_TEST\","
+                                + "\"template\":\"data-stack\",\"dependencies\":[]}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.code").value(200));
+
+        verify(taskService).createTask(argThat(request ->
+                "data-stack".equals(request.getTemplate()) && request.getDependencies().isEmpty()));
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("排队任务返回 queuedAt 和 queuePosition，运行中任务没有位次")
+    public void shouldExposeQueueFields() throws Exception {
+        LocalDateTime queuedAt = LocalDateTime.of(2026, 10, 10, 1, 2, 3);
+        Task queued = TaskBuilder.aTask().withId(3L).withStatus("QUEUED").withTaskCode("Q-1").build();
+        queued.setQueuedAt(queuedAt);
+        queued.setEnvironmentId(null);
+        when(taskService.getTaskById(3L)).thenReturn(queued);
+        when(taskService.queuePositions()).thenReturn(Map.of(3L, 2));
+
+        mockMvc.perform(get("/api/tasks/{taskId}", 3L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("QUEUED"))
+                .andExpect(jsonPath("$.data.queuedAt").value("2026-10-10T01:02:03"))
+                .andExpect(jsonPath("$.data.queuePosition").value(2))
+                .andExpect(jsonPath("$.data.environmentId").value(nullValue()));
+
+        Task running = TaskBuilder.aTask().withId(4L).running().build();
+        when(taskService.getTaskById(4L)).thenReturn(running);
+        when(taskService.queuePositions()).thenReturn(Map.of(4L, 1));
+
+        mockMvc.perform(get("/api/tasks/{taskId}", 4L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("RUNNING"))
+                .andExpect(jsonPath("$.data.queuePosition").value(nullValue()));
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("按 QUEUED 过滤任务列表")
+    public void shouldListQueuedTasks() throws Exception {
+        LocalDateTime queuedAt = LocalDateTime.of(2026, 10, 10, 8, 0);
+        Task queued = TaskBuilder.aTask().withId(6L).withStatus("QUEUED").build();
+        queued.setQueuedAt(queuedAt);
+        IPage<Task> page = new Page<>(1, 20);
+        page.setRecords(List.of(queued));
+        page.setTotal(1);
+        when(taskService.listTasks(0, 20, "QUEUED", null)).thenReturn(page);
+        when(taskService.queuePositions()).thenReturn(Map.of(6L, 1));
+
+        mockMvc.perform(get("/api/tasks").param("status", "QUEUED"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content.length()").value(1))
+                .andExpect(jsonPath("$.data.content[0].status").value("QUEUED"))
+                .andExpect(jsonPath("$.data.content[0].queuePosition").value(1))
+                .andExpect(jsonPath("$.data.content[0].queuedAt").value("2026-10-10T08:00:00"));
+
+        verify(taskService).listTasks(0, 20, "QUEUED", null);
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("未知依赖版本返回 400，并在 data 里列出可选版本")
+    public void shouldReturnCandidatesWhenDependencyVersionIsUnknown() throws Exception {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("candidates", List.of("5.7", "8.0"));
+        when(taskService.createTask(any())).thenThrow(new BusinessException(
+                ErrorCode.VALIDATION_ERROR,
+                "未知依赖版本: mysql:9.9，可选版本: 5.7, 8.0",
+                data));
+
+        mockMvc.perform(post("/api/tasks")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"taskCode\":\"BAD-1\",\"serviceId\":\"svc\",\"testType\":\"UNIT_TEST\","
+                                + "\"dependencies\":[\"mysql:9.9\"]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(5004))
+                .andExpect(jsonPath("$.message").value("未知依赖版本: mysql:9.9，可选版本: 5.7, 8.0"))
+                .andExpect(jsonPath("$.data.candidates[0]").value("5.7"))
+                .andExpect(jsonPath("$.data.candidates[1]").value("8.0"));
     }
 }

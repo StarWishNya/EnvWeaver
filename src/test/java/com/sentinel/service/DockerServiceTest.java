@@ -1,0 +1,611 @@
+package com.sentinel.service;
+
+import com.github.dockerjava.api.DockerClient;
+import com.github.dockerjava.api.async.ResultCallback;
+import com.github.dockerjava.api.command.CreateContainerCmd;
+import com.github.dockerjava.api.command.CreateContainerResponse;
+import com.github.dockerjava.api.command.HealthState;
+import com.github.dockerjava.api.command.InspectContainerCmd;
+import com.github.dockerjava.api.command.InspectContainerResponse;
+import com.github.dockerjava.api.command.LogContainerCmd;
+import com.github.dockerjava.api.command.RemoveContainerCmd;
+import com.github.dockerjava.api.command.StartContainerCmd;
+import com.github.dockerjava.api.command.StopContainerCmd;
+import com.github.dockerjava.api.command.PingCmd;
+import com.github.dockerjava.api.exception.NotFoundException;
+import com.github.dockerjava.api.exception.NotModifiedException;
+import com.github.dockerjava.api.model.ExposedPort;
+import com.github.dockerjava.api.model.Frame;
+import com.github.dockerjava.api.model.HostConfig;
+import com.github.dockerjava.api.model.StreamType;
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.sentinel.config.BusinessException;
+import com.sentinel.enums.ErrorCode;
+import com.sentinel.config.properties.DockerProperties;
+import com.sentinel.domain.Container;
+import com.sentinel.mapper.ContainerMapper;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.io.Closeable;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * DockerService 单元测试
+ * 使用 Mockito 模拟 DockerClient 与 ContainerMapper
+ */
+@ExtendWith(MockitoExtension.class)
+@DisplayName("DockerService 单元测试")
+public class DockerServiceTest {
+
+    @Mock
+    private DockerClient dockerClient;
+
+    @Mock
+    private ContainerMapper containerMapper;
+
+    private DockerProperties dockerProperties;
+    private DockerService dockerService;
+
+    @BeforeEach
+    public void setUp() {
+        dockerProperties = new DockerProperties();
+        dockerProperties.setResponseTimeout(1);
+        dockerService = new DockerService(dockerClient, containerMapper, dockerProperties);
+    }
+
+    @Test
+    @DisplayName("启动失败时强制删除已创建的容器")
+    public void shouldForceRemoveContainer_whenStartFails() {
+        CreateContainerCmd createCmd = stubCreateCmd();
+        when(createCmd.exec()).thenReturn(created("cid-start-fail"));
+
+        StartContainerCmd startCmd = mock(StartContainerCmd.class);
+        when(dockerClient.startContainerCmd("cid-start-fail")).thenReturn(startCmd);
+        doThrow(new RuntimeException("start failed")).when(startCmd).exec();
+
+        RemoveContainerCmd removeCmd = stubForceRemove("cid-start-fail", null);
+
+        assertThatThrownBy(() -> dockerService.createAndStartContainer(1L, "nginx:1.25", "web", 8080, 80))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("start failed");
+
+        verify(dockerClient).removeContainerCmd("cid-start-fail");
+        verify(removeCmd).withForce(eq(Boolean.TRUE));
+        verify(removeCmd).exec();
+        verify(containerMapper, never()).insert(any(Container.class));
+    }
+
+    @Test
+    @DisplayName("入库失败时强制删除已创建的容器")
+    public void shouldForceRemoveContainer_whenInsertFails() {
+        CreateContainerCmd createCmd = stubCreateCmd();
+        when(createCmd.exec()).thenReturn(created("cid-insert-fail"));
+        stubStartSuccess("cid-insert-fail");
+        when(containerMapper.insert(any(Container.class))).thenThrow(new RuntimeException("insert failed"));
+
+        RemoveContainerCmd removeCmd = stubForceRemove("cid-insert-fail", null);
+
+        assertThatThrownBy(() -> dockerService.createAndStartContainer(1L, "mysql:8.0", "db", 33061, 3306))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("insert failed");
+
+        verify(dockerClient).removeContainerCmd("cid-insert-fail");
+        verify(removeCmd).withForce(eq(Boolean.TRUE));
+        verify(removeCmd).exec();
+    }
+
+    @Test
+    @DisplayName("清理容器失败时仍抛出原始异常")
+    public void shouldKeepOriginalError_whenCleanupFails() {
+        CreateContainerCmd createCmd = stubCreateCmd();
+        when(createCmd.exec()).thenReturn(created("cid-cleanup-fail"));
+        stubStartSuccess("cid-cleanup-fail");
+        when(containerMapper.insert(any(Container.class))).thenThrow(new RuntimeException("insert failed"));
+        stubForceRemove("cid-cleanup-fail", new RuntimeException("cleanup failed"));
+
+        assertThatThrownBy(() -> dockerService.createAndStartContainer(1L, "redis:7", "cache", 16379, 6379))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("insert failed")
+                .hasMessageNotContaining("cleanup failed");
+    }
+
+    @Test
+    @DisplayName("镜像创建失败且尚未拿到容器 ID 时不删除容器")
+    public void shouldNotRemoveContainer_whenCreateFailsBeforeId() {
+        CreateContainerCmd createCmd = stubCreateCmd();
+        when(createCmd.exec()).thenThrow(new RuntimeException("image missing"));
+
+        assertThatThrownBy(() -> dockerService.createAndStartContainer(1L, "missing:latest", "x", 1, 1))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("image missing");
+
+        verify(dockerClient, never()).removeContainerCmd(nullable(String.class));
+    }
+
+    @Test
+    @DisplayName("创建容器时把内存、CPU 和网络写入 HostConfig")
+    public void shouldApplyMemoryCpuAndNetworkToHostConfig() {
+        DockerProperties.ContainerConfig containerConfig = dockerProperties.getContainer();
+        containerConfig.setMemoryLimit(2048);
+        containerConfig.setCpuLimit(1.5);
+        containerConfig.setDefaultNetwork("sentinel-dev-network");
+        containerConfig.setAutoRemove(true);
+        containerConfig.setRestartPolicy("unless-stopped");
+
+        CreateContainerCmd createCmd = stubRunningContainer("cid-limits");
+
+        Container created = dockerService.createAndStartContainer(
+                9L, "redis:7", "sentinel-redis", 18080, 8080);
+
+        ArgumentCaptor<HostConfig> hostConfigCaptor = ArgumentCaptor.forClass(HostConfig.class);
+        verify(createCmd).withHostConfig(hostConfigCaptor.capture());
+        verify(createCmd).withName("sentinel-redis");
+
+        HostConfig hostConfig = hostConfigCaptor.getValue();
+        assertThat(hostConfig.getMemory()).isEqualTo(2048L * 1024L * 1024L);
+        assertThat(hostConfig.getNanoCPUs()).isEqualTo(1_500_000_000L);
+        assertThat(hostConfig.getNetworkMode()).isEqualTo("sentinel-dev-network");
+        assertThat(hostConfig.getAutoRemove()).isTrue();
+        assertThat(hostConfig.getRestartPolicy().getName()).isEqualTo("unless-stopped");
+        assertThat(hostConfig.getPortBindings()).isNotNull();
+        assertThat(hostConfig.getPortBindings().getBindings()).isNotEmpty();
+
+        assertThat(created.getContainerId()).isEqualTo("cid-limits");
+        assertThat(created.getStatus()).isEqualTo("RUNNING");
+        assertThat(created.getHealthStatus()).isEqualTo("UNKNOWN");
+        assertThat(created.getPortMapping()).isEqualTo("8080:18080");
+        verify(dockerClient, never()).removeContainerCmd(nullable(String.class));
+    }
+
+    @Test
+    @DisplayName("未配置的网络、CPU 和重启策略不写入 HostConfig")
+    public void shouldSkipUnsetContainerResources() {
+        DockerProperties.ContainerConfig containerConfig = dockerProperties.getContainer();
+        containerConfig.setMemoryLimit(128);
+        containerConfig.setCpuLimit(null);
+        containerConfig.setDefaultNetwork(" ");
+        containerConfig.setRestartPolicy("");
+        containerConfig.setAutoRemove(null);
+
+        CreateContainerCmd createCmd = stubRunningContainer("cid-partial");
+        dockerService.createAndStartContainer(1L, "nginx:1.25", "web", 8080, 80);
+
+        ArgumentCaptor<HostConfig> hostConfigCaptor = ArgumentCaptor.forClass(HostConfig.class);
+        verify(createCmd).withHostConfig(hostConfigCaptor.capture());
+        HostConfig hostConfig = hostConfigCaptor.getValue();
+        assertThat(hostConfig.getMemory()).isEqualTo(128L * 1024L * 1024L);
+        assertThat(hostConfig.getNanoCPUs()).isNull();
+        assertThat(hostConfig.getNetworkMode()).isNull();
+        assertThat(hostConfig.getRestartPolicy()).isNull();
+        assertThat(hostConfig.getAutoRemove()).isFalse();
+    }
+
+    @Test
+    @DisplayName("运行中但没有健康检查时返回 UNKNOWN")
+    public void shouldReturnUnknown_whenRunningWithoutHealthcheck() {
+        InspectContainerResponse.ContainerState state = stubInspect("cid-no-health");
+        when(state.getRunning()).thenReturn(true);
+        when(state.getHealth()).thenReturn(null);
+
+        assertThat(dockerService.checkContainerHealth("cid-no-health")).isEqualTo("UNKNOWN");
+    }
+
+    @Test
+    @DisplayName("Docker healthy 映射为 HEALTHY")
+    public void shouldMapHealthyStatusToUpperCase() {
+        InspectContainerResponse.ContainerState state = stubInspect("cid-healthy");
+        HealthState dockerHealth = health("healthy");
+        when(state.getRunning()).thenReturn(true);
+        when(state.getHealth()).thenReturn(dockerHealth);
+
+        assertThat(dockerService.checkContainerHealth("cid-healthy")).isEqualTo("HEALTHY");
+    }
+
+    @Test
+    @DisplayName("Docker unhealthy 映射为 UNHEALTHY")
+    public void shouldMapUnhealthyStatusToUpperCase() {
+        InspectContainerResponse.ContainerState state = stubInspect("cid-unhealthy");
+        HealthState dockerHealth = health("unhealthy");
+        when(state.getRunning()).thenReturn(true);
+        when(state.getHealth()).thenReturn(dockerHealth);
+
+        assertThat(dockerService.checkContainerHealth("cid-unhealthy")).isEqualTo("UNHEALTHY");
+    }
+
+    @Test
+    @DisplayName("Docker starting 映射为 STARTING")
+    public void shouldMapStartingStatusToUpperCase() {
+        InspectContainerResponse.ContainerState state = stubInspect("cid-starting");
+        HealthState dockerHealth = health("starting");
+        when(state.getRunning()).thenReturn(true);
+        when(state.getHealth()).thenReturn(dockerHealth);
+
+        assertThat(dockerService.checkContainerHealth("cid-starting")).isEqualTo("STARTING");
+    }
+
+    @Test
+    @DisplayName("容器未运行时返回 UNHEALTHY")
+    public void shouldReturnUnhealthy_whenContainerNotRunning() {
+        InspectContainerResponse.ContainerState state = stubInspect("cid-stopped");
+        when(state.getRunning()).thenReturn(false);
+
+        assertThat(dockerService.checkContainerHealth("cid-stopped")).isEqualTo("UNHEALTHY");
+    }
+
+    @Test
+    @DisplayName("running 为空时按未运行返回 UNHEALTHY")
+    public void shouldReturnUnhealthy_whenRunningIsNull() {
+        InspectContainerResponse.ContainerState state = stubInspect("cid-null-running");
+        when(state.getRunning()).thenReturn(null);
+
+        assertThat(dockerService.checkContainerHealth("cid-null-running")).isEqualTo("UNHEALTHY");
+    }
+
+    @Test
+    @DisplayName("检查健康状态失败时返回 UNKNOWN")
+    public void shouldReturnUnknown_whenInspectFails() {
+        when(dockerClient.inspectContainerCmd("cid-inspect-fail"))
+                .thenThrow(new RuntimeException("inspect failed"));
+
+        assertThat(dockerService.checkContainerHealth("cid-inspect-fail")).isEqualTo("UNKNOWN");
+    }
+
+    @Test
+    @DisplayName("停止容器时按容器 ID 更新对应记录")
+    public void shouldStopContainerByContainerId() {
+        StopContainerCmd stopCmd = mock(StopContainerCmd.class);
+        when(dockerClient.stopContainerCmd("cid-9")).thenReturn(stopCmd);
+        when(stopCmd.withTimeout(eq(3))).thenReturn(stopCmd);
+        doNothing().when(stopCmd).exec();
+
+        Container row = new Container();
+        row.setId(42L);
+        row.setContainerId("cid-9");
+        row.setStatus("RUNNING");
+        when(containerMapper.findByContainerId("cid-9")).thenReturn(row);
+
+        dockerService.stopContainer("cid-9");
+
+        ArgumentCaptor<Container> captor = ArgumentCaptor.forClass(Container.class);
+        verify(containerMapper).findByContainerId("cid-9");
+        verify(containerMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getId()).isEqualTo(42L);
+        assertThat(captor.getValue().getStatus()).isEqualTo("STOPPED");
+        assertThat(captor.getValue().getStoppedAt()).isNotNull();
+        verify(stopCmd).withTimeout(eq(3));
+        verify(containerMapper, never()).selectList(nullable(Wrapper.class));
+    }
+
+    @Test
+    @DisplayName("删除容器时按容器 ID 删除对应记录")
+    public void shouldRemoveContainerByContainerId() {
+        stubForceRemove("cid-rm", null);
+
+        Container row = new Container();
+        row.setId(7L);
+        row.setContainerId("cid-rm");
+        when(containerMapper.findByContainerId("cid-rm")).thenReturn(row);
+
+        dockerService.removeContainer("cid-rm");
+
+        verify(containerMapper).findByContainerId("cid-rm");
+        verify(containerMapper).deleteById(7L);
+        verify(containerMapper, never()).selectList(nullable(Wrapper.class));
+    }
+
+    @Test
+    @DisplayName("Docker 可达时探测成功")
+    public void shouldPingDocker_whenAvailable() {
+        PingCmd pingCmd = mock(PingCmd.class);
+        when(dockerClient.pingCmd()).thenReturn(pingCmd);
+        doNothing().when(pingCmd).exec();
+
+        dockerService.assertDockerAvailable();
+
+        verify(pingCmd).exec();
+    }
+
+    @Test
+    @DisplayName("Docker 不可达时探测失败")
+    public void shouldThrow_whenDockerPingFails() {
+        PingCmd pingCmd = mock(PingCmd.class);
+        when(dockerClient.pingCmd()).thenReturn(pingCmd);
+        doThrow(new RuntimeException("connection refused")).when(pingCmd).exec();
+
+        assertThatThrownBy(() -> dockerService.assertDockerAvailable())
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", ErrorCode.DOCKER_ERROR.getCode())
+                .hasMessage("Docker 服务不可用");
+    }
+
+    @Test
+    @DisplayName("停止并删除容器时不改容器表")
+    public void shouldStopAndRemoveWithoutTouchingContainerRow() {
+        stubStop("cid-free", null);
+        RemoveContainerCmd removeCmd = stubForceRemove("cid-free", null);
+
+        dockerService.stopAndRemoveContainer("cid-free");
+
+        verify(dockerClient).stopContainerCmd("cid-free");
+        verify(removeCmd).withForce(eq(Boolean.TRUE));
+        verify(removeCmd).exec();
+        verify(containerMapper, never()).findByContainerId(anyString());
+        verify(containerMapper, never()).updateById(any(Container.class));
+    }
+
+    @Test
+    @DisplayName("容器已不存在时停止和删除都视为成功")
+    public void shouldIgnoreMissingContainerWhenStopAndRemove() {
+        stubStop("cid-gone", new NotFoundException("missing"));
+        stubForceRemove("cid-gone", new NotFoundException("missing"));
+
+        dockerService.stopAndRemoveContainer("cid-gone");
+
+        verify(dockerClient).stopContainerCmd("cid-gone");
+        verify(dockerClient).removeContainerCmd("cid-gone");
+    }
+
+    @Test
+    @DisplayName("容器已停止时仍强制删除")
+    public void shouldRemoveContainer_whenAlreadyStopped() {
+        stubStop("cid-stopped", new NotModifiedException("not modified"));
+        RemoveContainerCmd removeCmd = stubForceRemove("cid-stopped", null);
+
+        dockerService.stopAndRemoveContainer("cid-stopped");
+
+        verify(removeCmd).exec();
+    }
+
+    @Test
+    @DisplayName("停止失败时仍尝试删除")
+    public void shouldStillRemove_whenStopFails() {
+        stubStop("cid-stop-fail", new RuntimeException("stop failed"));
+        RemoveContainerCmd removeCmd = stubForceRemove("cid-stop-fail", null);
+
+        dockerService.stopAndRemoveContainer("cid-stop-fail");
+
+        verify(removeCmd).exec();
+    }
+
+    @Test
+    @DisplayName("删除失败时抛出 Docker 错误")
+    public void shouldThrow_whenRemoveFailsDuringRelease() {
+        stubStop("cid-rm-fail", null);
+        stubForceRemove("cid-rm-fail", new RuntimeException("remove failed"));
+
+        assertThatThrownBy(() -> dockerService.stopAndRemoveContainer("cid-rm-fail"))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", ErrorCode.DOCKER_ERROR.getCode())
+                .hasMessage("删除容器失败");
+    }
+
+    @Test
+    @DisplayName("容器 ID 为空时不访问 Docker")
+    public void shouldSkipDocker_whenContainerIdBlank() {
+        dockerService.stopAndRemoveContainer(null);
+        dockerService.stopAndRemoveContainer("  ");
+
+        verify(dockerClient, never()).stopContainerCmd(anyString());
+        verify(dockerClient, never()).removeContainerCmd(anyString());
+    }
+
+    @Test
+    @DisplayName("容器日志按 UTF-8 解码并忽略空 payload")
+    public void shouldDecodeContainerLogsAsUtf8AndSkipNullPayload() throws Exception {
+        LogContainerCmd logCmd = stubLogCmd("cid-logs");
+        Closeable stream = mock(Closeable.class);
+        doAnswer(invocation -> {
+            ResultCallback<Frame> callback = invocation.getArgument(0);
+            callback.onStart(stream);
+            callback.onNext(null);
+            callback.onNext(new Frame(StreamType.STDOUT, "甲".getBytes(StandardCharsets.UTF_8)));
+            callback.onNext(new Frame(StreamType.STDERR, null));
+            callback.onNext(new Frame(StreamType.STDOUT, "乙".getBytes(StandardCharsets.UTF_8)));
+            callback.onComplete();
+            return callback;
+        }).when(logCmd).exec(any(ResultCallback.class));
+
+        String logs = dockerService.getContainerLogs("cid-logs", 20);
+
+        assertThat(logs).isEqualTo("甲乙");
+        verify(logCmd).withStdOut(eq(Boolean.TRUE));
+        verify(logCmd).withStdErr(eq(Boolean.TRUE));
+        verify(logCmd).withTail(eq(Integer.valueOf(20)));
+        verify(stream).close();
+    }
+
+    @Test
+    @DisplayName("拉取日志失败时仍关闭 ResultCallback")
+    public void shouldCloseLogCallback_whenLogExecFails() throws Exception {
+        LogContainerCmd logCmd = stubLogCmd("cid-log-fail");
+        Closeable stream = mock(Closeable.class);
+        doAnswer(invocation -> {
+            ResultCallback<Frame> callback = invocation.getArgument(0);
+            callback.onStart(stream);
+            throw new RuntimeException("log exec failed");
+        }).when(logCmd).exec(any(ResultCallback.class));
+
+        assertThatThrownBy(() -> dockerService.getContainerLogs("cid-log-fail", 10))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("log exec failed");
+
+        verify(stream).close();
+    }
+
+    @Test
+    @DisplayName("日志等待使用 responseTimeout，超时则失败")
+    public void shouldFail_whenLogAwaitTimesOut() {
+        dockerProperties.setResponseTimeout(0);
+        LogContainerCmd logCmd = stubLogCmd("cid-log-timeout");
+        doAnswer(invocation -> invocation.getArgument(0))
+                .when(logCmd).exec(any(ResultCallback.class));
+
+        assertThatThrownBy(() -> dockerService.getContainerLogs("cid-log-timeout", 5))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("超时")
+                .hasMessageContaining("0");
+    }
+
+    @Test
+    @DisplayName("停止容器使用可配置的超时时间")
+    public void shouldUseConfiguredStopTimeout() {
+        dockerProperties.setStopTimeoutSeconds(9);
+        StopContainerCmd stopCmd = stubStop("cid-stop-timeout", null);
+        dockerService.stopContainer("cid-stop-timeout");
+        verify(stopCmd).withTimeout(eq(9));
+
+        dockerProperties.setStopTimeoutSeconds(4);
+        StopContainerCmd removeStop = stubStop("cid-remove-timeout", null);
+        stubForceRemove("cid-remove-timeout", null);
+        dockerService.stopAndRemoveContainer("cid-remove-timeout");
+        verify(removeStop).withTimeout(eq(4));
+
+        dockerProperties.setStopTimeoutSeconds(null);
+        StopContainerCmd fallback = stubStop("cid-stop-fallback", null);
+        dockerService.stopContainer("cid-stop-fallback");
+        verify(fallback).withTimeout(eq(3));
+    }
+
+    @Test
+    @DisplayName("since 以 Unix 秒传给 Docker，并打开行首 RFC3339 时间戳")
+    public void shouldPassSinceSecondsToLogCommand() throws Exception {
+        LogContainerCmd logCmd = stubLogCmd("cid-since");
+        when(logCmd.withSince(any(Integer.class))).thenReturn(logCmd);
+        when(logCmd.withTimestamps(eq(Boolean.TRUE))).thenReturn(logCmd);
+        Closeable stream = mock(Closeable.class);
+        doAnswer(invocation -> {
+            ResultCallback<Frame> callback = invocation.getArgument(0);
+            callback.onStart(stream);
+            callback.onNext(new Frame(StreamType.STDOUT,
+                    "2026-10-09T08:00:01.000000000Z log".getBytes(StandardCharsets.UTF_8)));
+            callback.onComplete();
+            return callback;
+        }).when(logCmd).exec(any(ResultCallback.class));
+
+        Instant since = Instant.ofEpochSecond(1_700_000_000L);
+        String logs = dockerService.getContainerLogs("cid-since", 15, since);
+
+        assertThat(logs).isEqualTo("2026-10-09T08:00:01.000000000Z log");
+        verify(logCmd).withSince(eq(1_700_000_000));
+        verify(logCmd).withTimestamps(eq(Boolean.TRUE));
+        verify(logCmd).withStdOut(eq(Boolean.TRUE));
+        verify(logCmd).withStdErr(eq(Boolean.TRUE));
+        verify(logCmd).withTail(eq(15));
+        verify(stream).close();
+    }
+
+    @Test
+    @DisplayName("since 为空时不设置时间过滤，也不加时间戳")
+    public void shouldLeaveSinceUnsetWhenNull() throws Exception {
+        LogContainerCmd logCmd = stubLogCmd("cid-nosince");
+        doAnswer(invocation -> {
+            ResultCallback<Frame> callback = invocation.getArgument(0);
+            callback.onComplete();
+            return callback;
+        }).when(logCmd).exec(any(ResultCallback.class));
+
+        assertThat(dockerService.getContainerLogs("cid-nosince", 4)).isEmpty();
+        assertThat(dockerService.getContainerLogs("cid-nosince", 4, null)).isEmpty();
+        verify(logCmd, never()).withSince(any(Integer.class));
+        verify(logCmd, never()).withTimestamps(any());
+    }
+
+    private CreateContainerCmd stubCreateCmd() {
+        CreateContainerCmd createCmd = mock(CreateContainerCmd.class);
+        when(dockerClient.createContainerCmd(anyString())).thenReturn(createCmd);
+        when(createCmd.withName(anyString())).thenReturn(createCmd);
+        when(createCmd.withExposedPorts(any(ExposedPort[].class))).thenReturn(createCmd);
+        when(createCmd.withHostConfig(any(HostConfig.class))).thenReturn(createCmd);
+        return createCmd;
+    }
+
+    private CreateContainerCmd stubRunningContainer(String containerId) {
+        CreateContainerCmd createCmd = stubCreateCmd();
+        when(createCmd.exec()).thenReturn(created(containerId));
+        stubStartSuccess(containerId);
+        when(containerMapper.insert(any(Container.class))).thenReturn(1);
+        return createCmd;
+    }
+
+    private void stubStartSuccess(String containerId) {
+        StartContainerCmd startCmd = mock(StartContainerCmd.class);
+        when(dockerClient.startContainerCmd(containerId)).thenReturn(startCmd);
+        doNothing().when(startCmd).exec();
+    }
+
+    private RemoveContainerCmd stubForceRemove(String containerId, RuntimeException execError) {
+        RemoveContainerCmd removeCmd = mock(RemoveContainerCmd.class);
+        when(dockerClient.removeContainerCmd(containerId)).thenReturn(removeCmd);
+        when(removeCmd.withForce(eq(Boolean.TRUE))).thenReturn(removeCmd);
+        if (execError == null) {
+            doNothing().when(removeCmd).exec();
+        } else {
+            doThrow(execError).when(removeCmd).exec();
+        }
+        return removeCmd;
+    }
+
+    private StopContainerCmd stubStop(String containerId, RuntimeException execError) {
+        StopContainerCmd stopCmd = mock(StopContainerCmd.class);
+        when(dockerClient.stopContainerCmd(containerId)).thenReturn(stopCmd);
+        when(stopCmd.withTimeout(any(Integer.class))).thenReturn(stopCmd);
+        if (execError == null) {
+            doNothing().when(stopCmd).exec();
+        } else {
+            doThrow(execError).when(stopCmd).exec();
+        }
+        return stopCmd;
+    }
+
+    private CreateContainerResponse created(String containerId) {
+        CreateContainerResponse response = new CreateContainerResponse();
+        response.setId(containerId);
+        return response;
+    }
+
+    private InspectContainerResponse.ContainerState stubInspect(String containerId) {
+        InspectContainerCmd inspectCmd = mock(InspectContainerCmd.class);
+        InspectContainerResponse response = mock(InspectContainerResponse.class);
+        InspectContainerResponse.ContainerState state = mock(InspectContainerResponse.ContainerState.class);
+        when(dockerClient.inspectContainerCmd(containerId)).thenReturn(inspectCmd);
+        when(inspectCmd.exec()).thenReturn(response);
+        when(response.getState()).thenReturn(state);
+        return state;
+    }
+
+    private HealthState health(String status) {
+        HealthState healthState = mock(HealthState.class);
+        when(healthState.getStatus()).thenReturn(status);
+        return healthState;
+    }
+
+    private LogContainerCmd stubLogCmd(String containerId) {
+        LogContainerCmd logCmd = mock(LogContainerCmd.class);
+        when(dockerClient.logContainerCmd(containerId)).thenReturn(logCmd);
+        when(logCmd.withStdOut(eq(Boolean.TRUE))).thenReturn(logCmd);
+        when(logCmd.withStdErr(eq(Boolean.TRUE))).thenReturn(logCmd);
+        when(logCmd.withTail(any(Integer.class))).thenReturn(logCmd);
+        return logCmd;
+    }
+}

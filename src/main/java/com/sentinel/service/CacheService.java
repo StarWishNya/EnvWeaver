@@ -107,6 +107,32 @@ public class CacheService {
     }
 
     /**
+     * 保存某个任务的诊断状态（status、diagnosisId、结果、provider、model、error）。
+     * 键为 diagnosis:task:{taskId}，TTL 使用 cache.diagnosis-ttl。
+     *
+     * @param taskId 任务 ID
+     * @param state 任务诊断状态
+     */
+    public void setTaskDiagnosis(Long taskId, Object state) {
+        String key = taskDiagnosisKey(taskId);
+        set(key, state, cacheProperties.getDiagnosisTtl(), TimeUnit.SECONDS);
+    }
+
+    /**
+     * 读取某个任务的诊断状态。Redis 不可用时返回 null。
+     *
+     * @param taskId 任务 ID
+     * @return 任务诊断状态，不存在时为 null
+     */
+    public Object getTaskDiagnosis(Long taskId) {
+        return get(taskDiagnosisKey(taskId));
+    }
+
+    private String taskDiagnosisKey(Long taskId) {
+        return cacheProperties.getDiagnosisKey("task:" + taskId);
+    }
+
+    /**
      * 设置系统指标缓存
      * TTL: 从配置文件读取
      * 
@@ -134,18 +160,39 @@ public class CacheService {
      * @param token JWT Token
      */
     public void addTokenToBlacklist(String token) {
-        String key = cacheProperties.getTokenBlacklistKey(token);
-        set(key, true, cacheProperties.getTokenBlacklistTtl(), TimeUnit.SECONDS);
+        addTokenToBlacklist(token, cacheProperties.getTokenBlacklistTtl());
     }
 
     /**
-     * 检查 Token 是否在黑名单中
+     * 将 Token 加入黑名单，TTL 使用调用方给出的剩余有效期（秒），而不是配置里的固定黑名单 TTL。
+     *
+     * @param token JWT Token
+     * @param ttlSeconds 剩余有效期（秒）
+     */
+    public void addTokenToBlacklist(String token, long ttlSeconds) {
+        if (ttlSeconds <= 0) {
+            log.warn("忽略非正 TTL 的黑名单写入: ttlSeconds={}", ttlSeconds);
+            return;
+        }
+        String key = cacheProperties.getTokenBlacklistKey(token);
+        set(key, true, ttlSeconds, TimeUnit.SECONDS);
+    }
+
+    /**
+     * 检查 Token 是否在黑名单中。
+     * Redis 连接失败时失败关闭：视为已拉黑，避免故障期间放行已注销的令牌。
      * 
      * @param token JWT Token
      * @return 是否在黑名单中
      */
     public boolean isTokenBlacklisted(String token) {
         String key = cacheProperties.getTokenBlacklistKey(token);
-        return exists(key);
+        try {
+            Boolean result = redisTemplate.hasKey(key);
+            return result != null && result;
+        } catch (RedisConnectionFailureException e) {
+            log.warn("Redis 连接失败，出于安全考虑将 Token 视为已拉黑", e);
+            return true;
+        }
     }
 }

@@ -5,7 +5,11 @@
 spring:
   application:
     name: sentinel
-  
+
+  # 可选加载项目根目录 .env（KEY=VALUE）。本地 spring-boot:run 从此注入 JWT_SECRET 等。
+  config:
+    import: "optional:file:.env[.properties]"
+
   # 激活的配置文件（dev/test/prod）
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:dev}
@@ -29,8 +33,8 @@ server:
 # JWT 配置
 # ============================================================================
 jwt:
-  # JWT 密钥（生产环境必须使用环境变量）
-  secret: ${JWT_SECRET:your-secret-key-change-in-production}
+  # JWT 密钥（必需，无默认值）。长度至少 32 个字符，通过环境变量 JWT_SECRET 或 .env 注入。
+  secret: ${JWT_SECRET}
   # 访问令牌过期时间（毫秒，默认24小时）
   expiration: ${JWT_EXPIRATION:86400000}
   # 刷新令牌过期时间（毫秒，默认7天）
@@ -88,34 +92,44 @@ cache:
 # AI 服务配置
 # ============================================================================
 ai:
-  # AI 提供商类型（ollama/openai/custom）
-  provider: ${AI_PROVIDER:ollama}
-  
-  # Ollama 配置（本地 AI 服务）
-  ollama:
-    base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
-    model: ${OLLAMA_MODEL:qwen2.5:7b}
-    timeout: ${OLLAMA_TIMEOUT:120}
-    stream: false
-    temperature: 0.7
-  
-  # OpenAI 配置（云端 AI 服务）
-  openai:
-    base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
-    api-key: ${OPENAI_API_KEY:}
-    model: ${OPENAI_MODEL:gpt-3.5-turbo}
-    timeout: ${OPENAI_TIMEOUT:60}
-    max-tokens: 2000
-    temperature: 0.7
-  
-  # 自定义 AI 配置（OpenAI 兼容 API）
-  custom:
-    base-url: ${CUSTOM_AI_BASE_URL:}
-    api-key: ${CUSTOM_AI_API_KEY:}
-    model: ${CUSTOM_AI_MODEL:}
-    timeout: ${CUSTOM_AI_TIMEOUT:60}
-    max-tokens: 2000
-    temperature: 0.7
+  # 逗号分隔，前者优先。未设置 AI_PROVIDER_ORDER 时回退到旧的 AI_PROVIDER。
+  provider-order: ${AI_PROVIDER_ORDER:${AI_PROVIDER:ollama}}
+
+  # 每个提供商还可选 timeout（秒，默认 60）、max-tokens（默认 2000）、temperature（默认 0.3）、enabled（默认 true）
+  providers:
+    ollama:
+      protocol: ollama
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+      model: ${OLLAMA_MODEL:qwen2.5:7b}
+      timeout: ${OLLAMA_TIMEOUT:120}
+    openai:
+      protocol: openai
+      base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
+      api-key: ${OPENAI_API_KEY:}
+      model: ${OPENAI_MODEL:gpt-4o-mini}
+    anthropic:
+      protocol: anthropic
+      base-url: ${ANTHROPIC_BASE_URL:https://api.anthropic.com}
+      api-key: ${ANTHROPIC_API_KEY:}
+      model: ${ANTHROPIC_MODEL:claude-sonnet-4-5}
+    deepseek:
+      protocol: openai
+      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+      api-key: ${DEEPSEEK_API_KEY:}
+      model: ${DEEPSEEK_MODEL:deepseek-flash}
+      # deepseek-flash 会先推理。默认关掉，避免思考占满 max-tokens 后正文为空。
+      thinking: ${DEEPSEEK_THINKING:disabled}
+    deepseek-anthropic:
+      protocol: anthropic
+      base-url: https://api.deepseek.com/anthropic
+      api-key: ${DEEPSEEK_API_KEY:}
+      model: ${DEEPSEEK_MODEL:deepseek-flash}
+      thinking: ${DEEPSEEK_THINKING:disabled}
+    custom:
+      protocol: ${CUSTOM_AI_PROTOCOL:openai}
+      base-url: ${CUSTOM_AI_BASE_URL:}
+      api-key: ${CUSTOM_AI_API_KEY:}
+      model: ${CUSTOM_AI_MODEL:}
 
 # ============================================================================
 # Docker 配置
@@ -154,7 +168,7 @@ management:
       base-path: /actuator
   endpoint:
     health:
-      show-details: always
+      show-details: when-authorized
   metrics:
     export:
       prometheus:
@@ -180,3 +194,55 @@ logging:
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
     file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+# ============================================================================
+# 任务生命周期
+# ============================================================================
+sentinel:
+  security:
+    # fail 拒绝启动，warn 每个问题一条 WARN，off 不检查。
+    # prod=fail，dev 与默认=warn，test=off。可用 --sentinel.security.credential-check= 覆盖。
+    credential-check: "warn"
+    # 非空时启动把 admin 密码设为该值的 BCrypt；没有 admin 则创建，角色 ADMIN。
+    # 环境变量名是 SENTINEL_ADMIN_PASSWORD。长度至少 12，否则拒绝启动。
+    admin-password: "${SENTINEL_ADMIN_PASSWORD:}"
+  lifecycle:
+    # 创建任务后自动供给环境
+    auto-provision: true
+    # 任务失败后自动请求诊断
+    auto-diagnose: true
+    # 失败环境保留时间，供查看现场
+    failed-retention: 30m
+    # 补扫遗漏 PENDING 任务的间隔
+    pending-sweep-interval: 30s
+    # 过期环境回收间隔
+    reaper-interval: 60s
+    # 核对容器是否还在。外部删除容器后把环境标为 ERROR，腾出供给名额。
+    reconcile:
+      enabled: true
+      interval: 60s
+      grace: 2m
+  # 按任务依赖启动容器。种类、版本和镜像在 catalog/middleware.yaml。
+  # 运维逃生口：要覆盖某种类的默认版本，或增加目录里没有的种类，再写 dependencies.<kind>（须含 image 与 port）。
+  provisioning:
+    ttl: 2h
+    port-range: "30000-39999"
+    pull-missing: true
+    pull-timeout: 5m
+    ready-timeout: 90s
+    host: localhost
+    # 容器端口只发布到本机，环境内数据库为固定弱口令
+    bind-address: ${SENTINEL_PROVISIONING_BIND_ADDRESS:127.0.0.1}
+    # 0 或负数表示不限制。单机用进程内锁；多实例需要分布式锁。
+    limits:
+      max-active-environments: 10
+      max-containers: 30
+
+  # 运行中容器的 CPU、内存采样
+  monitoring:
+    resource-usage:
+      enabled: true
+      interval: 30s
+      read-timeout: 5s
+      max-environments-per-pass: 200
+      parallelism: 4

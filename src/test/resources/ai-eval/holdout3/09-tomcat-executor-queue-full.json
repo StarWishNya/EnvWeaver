@@ -1,0 +1,15 @@
+{
+  "id": "tomcat-executor-queue-full",
+  "description": "The servlet thread pool refuses another render task because every worker is busy and the queue is full.",
+  "log": "2026-08-16 21:33:01.014  INFO 3902 --- [main] org.paper.press.PressApp : Starting press on 192.168.88.14\n2026-08-16 21:33:02.440  INFO 3902 --- [main] o.s.b.w.e.tomcat.TomcatWebServer : Tomcat started on port 8088 (http)\n2026-08-16 21:33:02.501  INFO 3902 --- [main] o.p.press.PressApp : Started press in 3.3 seconds\n2026-08-16 21:39:04.220  INFO 3902 --- [http-nio-8088-exec-4] o.p.press.web.StatusController : GET /press/status 200\n2026-08-16 21:40:18.220  INFO 3902 --- [http-nio-8088-exec-1] o.p.press.web.JobController : POST /jobs/render id=j-882\n2026-08-16 21:40:18.640 ERROR 3902 --- [http-nio-8088-exec-1] o.a.c.core.StandardWrapperValve : Servlet.service() for servlet [dispatcherServlet] threw exception\norg.springframework.web.util.NestedServletException: Request processing failed; nested exception is org.springframework.core.task.TaskRejectedException: Executor [java.util.concurrent.ThreadPoolExecutor@3aa[Running, pool size = 40, active threads = 40, queued tasks = 200, completed tasks = 19044]] did not accept task: org.paper.press.render.RenderJob@ab1\n\tat org.springframework.web.servlet.FrameworkServlet.processRequest(FrameworkServlet.java:1014)\n\tat org.springframework.web.servlet.FrameworkServlet.doPost(FrameworkServlet.java:909)\n\tat javax.servlet.http.HttpServlet.service(HttpServlet.java:555)\n\tat org.apache.catalina.core.ApplicationFilterChain.internalDoFilter(ApplicationFilterChain.java:227)\n\tat org.paper.press.web.JobController.render(JobController.java:37)\nCaused by: org.springframework.core.task.TaskRejectedException: Executor [java.util.concurrent.ThreadPoolExecutor@3aa[Running, pool size = 40, active threads = 40, queued tasks = 200, completed tasks = 19044]] did not accept task: org.paper.press.render.RenderJob@ab1\n\tat org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor.execute(ThreadPoolTaskExecutor.java:360)\n\tat org.paper.press.render.RenderQueue.submit(RenderQueue.java:44)\n\tat org.paper.press.web.JobController.render(JobController.java:37)\n\t... 4 more\n2026-08-16 21:40:18.701 ERROR 3902 --- [http-nio-8088-exec-1] o.p.press.web.JobController : render j-882 not queued",
+  "expected": {
+    "errorType": "RESOURCE_EXHAUSTED",
+    "severity": "HIGH",
+    "rootCauseKeywords": [
+      "TaskRejectedException",
+      "did not accept task",
+      "线程池",
+      "queued tasks = 200"
+    ]
+  }
+}

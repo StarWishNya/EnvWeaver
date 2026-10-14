@@ -1,0 +1,15 @@
+{
+  "id": "gson-downstream-malformed-body",
+  "description": "A reachable fuel service returns HTTP 200 whose body Gson rejects as malformed JSON.",
+  "log": "2026-05-14 16:08:33.102  INFO 6704 --- [main] dev.lumenfreight.rating.RatingApp : Starting rating-api on 10.40.1.12\n2026-05-14 16:08:34.880  INFO 6704 --- [main] o.s.b.w.e.tomcat.TomcatWebServer : Tomcat started on port 7070 (http)\n2026-05-14 16:08:34.940  INFO 6704 --- [main] d.l.rating.RatingApp : Started rating-api in 3.8 seconds\n2026-05-14 16:08:50.010  INFO 6704 --- [http-nio-7070-exec-1] d.l.rating.web.LaneController : GET /lanes/SFO-NRT 200\n2026-05-14 16:09:02.114  INFO 6704 --- [http-nio-7070-exec-6] d.l.rating.web.QuoteController : POST /quotes lane=SFO-NRT\n2026-05-14 16:09:02.330  INFO 6704 --- [http-nio-7070-exec-6] d.l.rating.fuel.FuelClient : POST http://fuel.lumenfreight.dev/v1/surcharge -> HTTP/1.1 200 OK (38 bytes)\ncom.google.gson.JsonSyntaxException: com.google.gson.stream.MalformedJsonException: Use JsonReader.setLenient(true) to accept malformed JSON at line 1 column 12 path $\n\tat com.google.gson.internal.Streams.parse(Streams.java:60)\n\tat com.google.gson.JsonParser.parseReader(JsonParser.java:66)\n\tat com.google.gson.Gson.fromJson(Gson.java:1227)\n\tat dev.lumenfreight.rating.fuel.FuelClient.read(FuelClient.java:84)\n\tat dev.lumenfreight.rating.web.QuoteController.quote(QuoteController.java:41)\nCaused by: com.google.gson.stream.MalformedJsonException: Use JsonReader.setLenient(true) to accept malformed JSON at line 1 column 12 path $\n\tat com.google.gson.stream.JsonReader.syntaxError(JsonReader.java:1611)\n\tat com.google.gson.stream.JsonReader.checkLenient(JsonReader.java:1422)\n\tat com.google.gson.stream.JsonReader.doPeek(JsonReader.java:534)\n\tat com.google.gson.internal.Streams.parse(Streams.java:55)\n\t... 4 more\n2026-05-14 16:09:02.401 ERROR 6704 --- [http-nio-7070-exec-6] d.l.rating.web.QuoteController : quote SFO-NRT failed",
+  "expected": {
+    "errorType": "DEPENDENCY_FAILURE",
+    "severity": "HIGH",
+    "rootCauseKeywords": [
+      "MalformedJsonException",
+      "HTTP/1.1 200",
+      "响应体",
+      "Gson"
+    ]
+  }
+}

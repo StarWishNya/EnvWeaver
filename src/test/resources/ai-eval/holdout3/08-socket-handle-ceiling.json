@@ -1,0 +1,15 @@
+{
+  "id": "socket-handle-ceiling",
+  "description": "Outbound connects fail once the process has exhausted its socket handle budget.",
+  "log": "2026-06-21 13:12:04.330  INFO 7740 --- [main] com.westfork.intake.IntakeApp : Starting intake on 10.6.6.6\n2026-06-21 13:12:05.102  INFO 7740 --- [main] o.s.b.w.e.tomcat.TomcatWebServer : Tomcat started on port 9200 (http)\n2026-06-21 13:12:05.188  INFO 7740 --- [main] c.w.intake.IntakeApp : Started intake in 2.4 seconds\n2026-06-21 13:17:02.010  INFO 7740 --- [http-nio-9200-exec-3] c.w.intake.web.BatchController : POST /batches id=b-41 202\n2026-06-21 13:18:44.009  INFO 7740 --- [http-nio-9200-exec-12] c.w.intake.web.FanoutController : POST /fanout batch=900\n2026-06-21 13:18:44.880 ERROR 7740 --- [http-nio-9200-exec-12] c.w.intake.push.PushClient : connect 10.6.6.40:9410 failed\norg.apache.http.conn.HttpHostConnectException: Connect to 10.6.6.40:9410 [/10.6.6.40] failed: No buffer space available (maximum connections reached?): connect\n\tat org.apache.http.impl.conn.DefaultHttpClientConnectionOperator.connect(DefaultHttpClientConnectionOperator.java:156)\n\tat org.apache.http.impl.conn.PoolingHttpClientConnectionManager.connect(PoolingHttpClientConnectionManager.java:376)\n\tat org.apache.http.impl.execchain.MainClientExec.establishRoute(MainClientExec.java:393)\n\tat com.westfork.intake.push.PushClient.open(PushClient.java:48)\nCaused by: java.net.SocketException: No buffer space available (maximum connections reached?): connect\n\tat java.base/sun.nio.ch.Net.connect0(Native Method)\n\tat java.base/sun.nio.ch.Net.connect(Net.java:579)\n\tat java.base/sun.nio.ch.Net.connect(Net.java:568)\n\tat java.base/sun.nio.ch.NioSocketImpl.connect(NioSocketImpl.java:593)\n\tat java.base/java.net.SocksSocketImpl.connect(SocksSocketImpl.java:327)\n\tat java.base/java.net.Socket.connect(Socket.java:633)\n\tat org.apache.http.conn.socket.PlainConnectionSocketFactory.connectSocket(PlainConnectionSocketFactory.java:75)\n\t... 4 more\n2026-06-21 13:18:45.010 ERROR 7740 --- [http-nio-9200-exec-12] c.w.intake.web.FanoutController : fanout batch 900 aborted",
+  "expected": {
+    "errorType": "RESOURCE_EXHAUSTED",
+    "severity": "HIGH",
+    "rootCauseKeywords": [
+      "maximum connections reached",
+      "SocketException",
+      "文件描述符",
+      "No buffer space available"
+    ]
+  }
+}

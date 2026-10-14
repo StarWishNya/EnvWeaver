@@ -36,8 +36,12 @@ DB_PASSWORD=your-db-password
 REDIS_HOST=your-redis-host
 REDIS_PASSWORD=your-redis-password
 
-# JWT 密钥（至少32位）
-JWT_SECRET=your-super-secret-jwt-key-min-32-chars
+# JWT 密钥（至少 32 位，至少 8 个不同字符）。示例带 change_me，启动检查会拒绝。
+# openssl rand -base64 48
+JWT_SECRET=change_me_replace_with_openssl_rand_base64_48
+
+# 可选。非空时启动重置 admin 口令（至少 12 位）。生产 profile 会拒绝种子口令。
+# SENTINEL_ADMIN_PASSWORD=change_me_admin_min_12
 
 # AI 服务配置（根据选择的提供商）
 AI_PROVIDER=openai
@@ -102,6 +106,18 @@ jwt:
 - 开发环境：1-24小时
 - 测试环境：30分钟-12小时
 - 生产环境：15分钟-1小时
+- 不要使用 `.env.example` 里的示例密钥。启动检查会拒绝包含 `change_me`、`changeme`、`your-super-secret`、`change-in-production` 的值，以及不同字符少于 8 个的值
+
+### 4.1 启动凭据检查
+
+```yaml
+sentinel:
+  security:
+    credential-check: "warn"   # prod 为 "fail"，test 为 "off"（off 必须加引号）
+    admin-password: "${SENTINEL_ADMIN_PASSWORD:}"
+```
+
+`fail` 在发现示例 JWT 密钥或启用用户仍使用 `admin123`、`user123`、`admin`、`password`、`123456` 时拒绝启动，并说明要改哪一项。`warn` 对每个问题打一条 WARN。`off` 不检查。`SENTINEL_ADMIN_PASSWORD` 非空且不少于 12 个字符时，启动把 `admin` 写成该口令的 BCrypt；用户不存在则创建，角色 `ADMIN`。短于 12 个字符会拒绝启动。日志不记录该口令、JWT 密钥和密码哈希。
 
 ### 4. 安全配置
 

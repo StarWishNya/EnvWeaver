@@ -27,6 +27,7 @@ CREATE TABLE t_task (
     error_message   TEXT                                        COMMENT '错误信息',
     started_at      DATETIME                                    COMMENT '开始时间',
     completed_at    DATETIME                                    COMMENT '完成时间',
+    queued_at       DATETIME                                    COMMENT '进入排队的时间，出队后清空',
     created_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     updated_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     
@@ -138,7 +139,7 @@ CREATE TABLE t_user (
 -- ============================================================
 -- 初始化管理员用户（密码: admin123，BCrypt 加密）
 INSERT INTO t_user (username, password, email, role) VALUES
-('admin', '$2a$10$N.zmdr9k7uOCQb376NoUnuTJ8iAt6Z5EHsM8lE9lBOsl7iAt6Z5EH', 'admin@sentinel.local', 'ADMIN');
+('admin', '$2a$10$vnTdr59Hm8233GyT8lke6OnrF8uwmsQ0gv0aa6p93DxpqOeLmSjVO', 'admin@sentinel.local', 'ADMIN');
 
 INSERT INTO t_system_config (config_key, config_value, value_type, description) VALUES
 ('max_concurrent_environments', '10', 'INT', '最大并发环境数'),
@@ -203,3 +204,22 @@ BEGIN
     SELECT ROW_COUNT() as deleted_count;
 END //
 DELIMITER ;
+
+-- ============================================================
+-- 已有库升级：补齐 t_task.queued_at（可重复执行）
+-- 应用启动时 TaskQueuedAtMigration 会做同样的事。
+-- ============================================================
+SET @queued_at_exists := (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 't_task'
+      AND COLUMN_NAME = 'queued_at'
+);
+SET @queued_at_ddl := IF(
+    @queued_at_exists = 0,
+    'ALTER TABLE t_task ADD COLUMN queued_at DATETIME NULL COMMENT ''进入排队的时间，出队后清空''',
+    'SELECT 1'
+);
+PREPARE queued_at_stmt FROM @queued_at_ddl;
+EXECUTE queued_at_stmt;
+DEALLOCATE PREPARE queued_at_stmt;

@@ -1,0 +1,15 @@
+{
+  "id": "file-permission-denied",
+  "description": "A live export request fails while opening a report file because the process user cannot write that path.",
+  "log": "2026-10-09T23:12:01.010Z  INFO 1 --- [main] com.acme.report.ReportApplication : Started ReportApplication in 5.0 seconds\n2026-10-09T23:12:01.220Z  INFO 1 --- [main] com.acme.report.export.ExportWriter : export root=/var/lib/acme/exports user=app uid=10001\n2026-10-09T23:18:44.102Z  INFO 1 --- [http-nio-8080-exec-6] com.acme.report.web.ExportController : POST /api/exports id=exp_441 format=csv\n2026-10-09T23:18:44.140Z  INFO 1 --- [http-nio-8080-exec-6] com.acme.report.export.ExportWriter : opening /var/lib/acme/exports/exp_441.csv\n2026-10-09T23:18:44.188Z ERROR 1 --- [http-nio-8080-exec-6] o.a.c.c.C.[.[.[/].[dispatcherServlet] : Servlet.service() for servlet [dispatcherServlet] threw exception\njava.nio.file.AccessDeniedException: /var/lib/acme/exports/exp_441.csv\n    at java.base/sun.nio.fs.UnixException.translateToIOException(UnixException.java:90)\n    at java.base/sun.nio.fs.UnixException.rethrowAsIOException(UnixException.java:106)\n    at java.base/sun.nio.fs.UnixException.rethrowAsIOException(UnixException.java:111)\n    at java.base/sun.nio.fs.UnixFileSystemProvider.newByteChannel(UnixFileSystemProvider.java:218)\n    at java.base/java.nio.file.Files.newByteChannel(Files.java:380)\n    at java.base/java.nio.file.Files.newByteChannel(Files.java:432)\n    at java.base/java.nio.file.spi.FileSystemProvider.newOutputStream(FileSystemProvider.java:482)\n    at java.base/java.nio.file.Files.newOutputStream(Files.java:228)\n    at com.acme.report.export.ExportWriter.open(ExportWriter.java:64)\n    at com.acme.report.web.ExportController.export(ExportController.java:38)\n    at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)\n    at java.base/java.lang.reflect.Method.invoke(Method.java:568)\n    at org.springframework.web.method.support.InvocableHandlerMethod.doInvoke(InvocableHandlerMethod.java:207)\n    at org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerAdapter.invokeHandlerMethod(RequestMappingHandlerAdapter.java:884)\n    at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:1081)\n    at org.apache.catalina.core.StandardWrapperValve.invoke(StandardWrapperValve.java:167)\n    at org.apache.tomcat.util.net.NioEndpoint$SocketProcessor.doRun(NioEndpoint.java:1744)\n    at java.base/java.lang.Thread.run(Thread.java:840)\nCaused by: java.nio.file.AccessDeniedException: /var/lib/acme/exports/exp_441.csv: Permission denied\n2026-10-09T23:18:44.201Z ERROR 1 --- [http-nio-8080-exec-6] com.acme.report.web.ExportController : export failed id=exp_441\n2026-10-09T23:18:44.214Z  INFO 1 --- [http-nio-8080-exec-6] o.s.w.s.DispatcherServlet : Completed 500 INTERNAL_SERVER_ERROR",
+  "expected": {
+    "errorType": "CONFIG_ERROR",
+    "severity": "HIGH",
+    "rootCauseKeywords": [
+      "Permission denied",
+      "AccessDenied",
+      "权限",
+      "exports"
+    ]
+  }
+}

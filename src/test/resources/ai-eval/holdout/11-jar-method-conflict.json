@@ -1,0 +1,20 @@
+{
+  "id": "jar-method-conflict",
+  "description": "The application starts, then a live encode request fails with NoSuchMethodError from a classpath version clash.",
+  "log": "2026-10-09T21:05:01.010Z  INFO 1 --- [main] com.acme.media.MediaApplication : Starting MediaApplication v1.3.0 using Java 17.0.12\n2026-10-09T21:05:04.220Z  INFO 1 --- [main] com.acme.media.MediaApplication : Started MediaApplication in 4.1 seconds\n2026-10-09T21:05:04.330Z  INFO 1 --- [main] com.acme.media.codec.CodecProbe : commons-codec visible as commons-codec-1.11.jar; encoder expected 1.15\n2026-10-09T21:07:18.102Z  INFO 1 --- [http-nio-8080-exec-4] com.acme.media.web.EncodeController : POST /api/media/encode asset=ast_77 codec=base64\n2026-10-09T21:07:18.140Z ERROR 1 --- [http-nio-8080-exec-4] o.a.c.c.C.[.[.[/].[dispatcherServlet] : Servlet.service() for servlet [dispatcherServlet] threw exception\njava.lang.NoSuchMethodError: 'java.lang.String org.apache.commons.codec.binary.Base64.encodeBase64String(byte[], boolean)'\n    at com.acme.media.codec.UrlSafeEncoder.encode(UrlSafeEncoder.java:27)\n    at com.acme.media.web.EncodeController.encode(EncodeController.java:41)\n    at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)\n    at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:77)\n    at java.base/java.lang.reflect.Method.invoke(Method.java:568)\n    at org.springframework.web.method.support.InvocableHandlerMethod.doInvoke(InvocableHandlerMethod.java:207)\n    at org.springframework.web.servlet.mvc.method.annotation.ServletInvocableHandlerMethod.invokeAndHandle(ServletInvocableHandlerMethod.java:117)\n    at org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerAdapter.invokeHandlerMethod(RequestMappingHandlerAdapter.java:884)\n    at org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:1081)\n    at org.springframework.web.servlet.FrameworkServlet.processRequest(FrameworkServlet.java:1011)\n    at jakarta.servlet.http.HttpServlet.service(HttpServlet.java:658)\n    at org.apache.catalina.core.ApplicationFilterChain.internalDoFilter(ApplicationFilterChain.java:205)\n    at org.apache.catalina.core.StandardWrapperValve.invoke(StandardWrapperValve.java:167)\n    at org.apache.tomcat.util.net.NioEndpoint$SocketProcessor.doRun(NioEndpoint.java:1744)\n    at org.apache.tomcat.util.threads.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1191)\n    at java.base/java.lang.Thread.run(Thread.java:840)\n2026-10-09T21:07:18.155Z ERROR 1 --- [http-nio-8080-exec-4] com.acme.media.web.EncodeController : encode failed asset=ast_77\n2026-10-09T21:07:18.166Z  INFO 1 --- [http-nio-8080-exec-4] o.s.w.s.DispatcherServlet : Completed 500 INTERNAL_SERVER_ERROR\n2026-10-09T21:07:18.180Z  WARN 1 --- [http-nio-8080-exec-4] com.acme.media.codec.CodecProbe : loaded Base64 from jar:file:/app/lib/commons-codec-1.11.jar!/org/apache/commons/codec/binary/Base64.class\n2026-10-09T21:07:18.192Z  WARN 1 --- [http-nio-8080-exec-4] com.acme.media.codec.CodecProbe : caller was compiled against encodeBase64String(byte[], boolean) which is absent from 1.11",
+  "expected": {
+    "errorType": "DEPENDENCY_FAILURE",
+    "severity": "HIGH",
+    "acceptable": [
+      "DEPENDENCY_FAILURE",
+      "UNKNOWN"
+    ],
+    "labelNote": "Base64 is present, but the loaded commons-codec 1.11 jar lacks encodeBase64String(byte[], boolean), so linkage fails at the call. That is the same dependency-classpath family as ClassNotFoundException and NoClassDefFoundError, so primary is DEPENDENCY_FAILURE. UNKNOWN is acceptable because the taxonomy's dependency examples name those two classes and HTTP 5xx, not NoSuchMethodError, and a reviewer can treat a binary incompatibility as an application packaging defect.",
+    "rootCauseKeywords": [
+      "NoSuchMethodError",
+      "encodeBase64String",
+      "commons-codec",
+      "版本"
+    ]
+  }
+}

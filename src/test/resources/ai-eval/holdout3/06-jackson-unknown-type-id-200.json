@@ -1,0 +1,15 @@
+{
+  "id": "jackson-unknown-type-id-200",
+  "description": "A reachable tariff API returns HTTP 200 JSON that Jackson cannot bind because the type id is unknown.",
+  "log": "2026-09-01 08:45:10.550  INFO 2219 --- [main] uk.co.briarlane.booking.BookingApp : Starting booking on 10.7.3.55\n2026-09-01 08:45:12.010  INFO 2219 --- [main] o.s.b.w.e.tomcat.TomcatWebServer : Tomcat started on port 8181 (http)\n2026-09-01 08:45:12.088  INFO 2219 --- [main] u.c.b.booking.BookingApp : Started booking in 4.0 seconds\n2026-09-01 08:45:30.114  INFO 2219 --- [http-nio-8181-exec-1] u.c.b.web.PingController : GET /ping 200\n2026-09-01 08:46:40.220  INFO 2219 --- [http-nio-8181-exec-2] u.c.b.web.HoldController : POST /holds ref=HL-440\n2026-09-01 08:46:40.508  INFO 2219 --- [http-nio-8181-exec-2] u.c.b.tariff.TariffClient : GET http://tariff.briarlane.co.uk/rules/HL-440 status 200\norg.springframework.web.client.RestClientException: Error while extracting response for type [uk.co.briarlane.booking.tariff.Rule] and content type [application/json]\n\tat org.springframework.web.client.HttpMessageConverterExtractor.extractData(HttpMessageConverterExtractor.java:126)\n\tat org.springframework.web.client.RestTemplate$ResponseEntityResponseExtractor.extractData(RestTemplate.java:1048)\n\tat org.springframework.web.client.RestTemplate.doExecute(RestTemplate.java:782)\n\tat uk.co.briarlane.booking.tariff.TariffClient.fetch(TariffClient.java:61)\n\tat uk.co.briarlane.booking.web.HoldController.hold(HoldController.java:52)\nCaused by: com.fasterxml.jackson.databind.exc.InvalidTypeIdException: Could not resolve type id 'WEEKEND_PEAK' as a subtype of `uk.co.briarlane.booking.tariff.Rule`: known type ids = [FLAT, PER_MILE] (for POJO property 'rule')\n\tat com.fasterxml.jackson.databind.exc.InvalidTypeIdException.from(InvalidTypeIdException.java:43)\n\tat com.fasterxml.jackson.databind.DeserializationContext.invalidTypeIdException(DeserializationContext.java:1956)\n\tat com.fasterxml.jackson.databind.jsontype.impl.TypeDeserializerBase._handleUnknownTypeId(TypeDeserializerBase.java:318)\n\tat com.fasterxml.jackson.databind.jsontype.impl.AsPropertyTypeDeserializer._deserializeTypedForId(AsPropertyTypeDeserializer.java:140)\n\t... 5 more\n2026-09-01 08:46:40.560 ERROR 2219 --- [http-nio-8181-exec-2] u.c.b.web.HoldController : hold HL-440 failed",
+  "expected": {
+    "errorType": "DEPENDENCY_FAILURE",
+    "severity": "HIGH",
+    "rootCauseKeywords": [
+      "InvalidTypeIdException",
+      "status 200",
+      "响应体",
+      "extracting response"
+    ]
+  }
+}

@@ -9,7 +9,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * Sentinel 智能测试环境管理系统主启动类
- * 
+ *
  * @author Sentinel Team
  * @version 1.0.0
  */
@@ -19,6 +19,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableConfigurationProperties({
         JwtProperties.class,
         SecurityProperties.class,
+        SentinelSecurityProperties.class,
         CacheProperties.class,
         AIProperties.class,
         DockerProperties.class

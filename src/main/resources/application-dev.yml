@@ -44,7 +44,6 @@ mybatis-plus:
   type-aliases-package: com.sentinel.domain
   configuration:
     map-underscore-to-camel-case: true
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
   global-config:
     db-config:
       id-type: auto
@@ -53,8 +52,8 @@ mybatis-plus:
       logic-not-delete-value: 0
 
 # JWT 配置（开发环境）
+# 密钥不在此硬编码，统一走 application.yml 的 ${JWT_SECRET}（至少 32 个字符）
 jwt:
-  secret: sentinel-dev-secret-key-2024-change-in-production
   expiration: 86400000  # 24小时
   refresh-expiration: 604800000  # 7天
 
@@ -79,13 +78,12 @@ cache:
 
 # AI 配置（开发环境 - 使用本地 Ollama）
 ai:
-  provider: ollama
-  ollama:
-    base-url: http://localhost:11434
-    model: qwen2.5:7b
-    timeout: 120
-    stream: false
-    temperature: 0.7
+  provider-order: ${AI_PROVIDER_ORDER:${AI_PROVIDER:ollama}}
+  providers:
+    ollama:
+      base-url: http://localhost:11434
+      model: qwen2.5:7b
+      timeout: 120
 
 # Docker 配置（开发环境）
 docker:
@@ -100,12 +98,13 @@ docker:
     memory-limit: 512
     cpu-limit: 1.0
 
-# 日志配置（开发环境 - DEBUG 级别）
+# 日志配置（开发环境）。Mapper 保持 INFO，避免 DEBUG SQL 把密码哈希打进参数日志。
 logging:
   level:
     root: INFO
     com.sentinel: DEBUG
-    com.baomidou.mybatisplus: DEBUG
+    com.sentinel.mapper: INFO
+    com.baomidou.mybatisplus: INFO
     org.springframework.security: DEBUG
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n"
@@ -113,3 +112,41 @@ logging:
     name: logs/sentinel-dev.log
     max-size: 100MB
     max-history: 30
+
+# ============================================================================
+# 任务生命周期（开发环境）
+# ============================================================================
+sentinel:
+  security:
+    # 开发环境只告警，不因种子口令拒绝启动
+    credential-check: "warn"
+  lifecycle:
+    auto-provision: true
+    auto-diagnose: true
+    failed-retention: 30m
+    pending-sweep-interval: 30s
+    reaper-interval: 60s
+    reconcile:
+      enabled: true
+      interval: 60s
+      grace: 2m
+  provisioning:
+    ttl: 2h
+    port-range: "30000-39999"
+    pull-missing: true
+    pull-timeout: 5m
+    ready-timeout: 90s
+    host: localhost
+    limits:
+      max-active-environments: 10
+      max-containers: 30
+    # 依赖以 catalog/middleware.yaml 为准。覆盖默认版本时再写 dependencies.<kind>。
+
+  # 运行中容器的 CPU、内存采样
+  monitoring:
+    resource-usage:
+      enabled: true
+      interval: 30s
+      read-timeout: 5s
+      max-environments-per-pass: 200
+      parallelism: 4
